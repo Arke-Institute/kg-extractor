@@ -319,6 +319,23 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
 
   const updates = buildUpdates(operations, labelToId, sourceRef);
 
+  // Add source → extracted entity relationships (enables traversal from source text)
+  if (results.length > 0) {
+    updates.push({
+      entity_id: target.id,
+      relationships_add: results.map((r) => ({
+        predicate: 'extracted_entity',
+        peer: r.entityId,
+        peer_label: r.label,
+        direction: 'outgoing' as const,
+        properties: {
+          extracted_at: new Date().toISOString(),
+          entity_type: r.type,
+        },
+      })),
+    });
+  }
+
   if (updates.length > 0) {
     const totalRelationships = updates.reduce(
       (sum, u) => sum + (u.relationships_add?.length || 0),
