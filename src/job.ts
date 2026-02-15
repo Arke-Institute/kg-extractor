@@ -1,13 +1,15 @@
 /**
- * Main job processing logic for KG extraction
+ * Job Processing Logic for KG Extraction (v2 - Durable Object based)
  *
  * Two-phase processing:
  * 1. Sync: Gemini extraction + check-create entities
  * 2. Async: Fire updates via /updates/additive
+ *
+ * Unlike Tier 1 workers, this can take arbitrarily long (via alarm rescheduling).
  */
 
-import type { KladosJob } from '@arke-institute/rhiza';
-import { createKladosError, KladosErrorCode } from '@arke-institute/rhiza';
+import type { ArkeClient } from '@arke-institute/sdk';
+import type { KladosLogger, KladosRequest, Output } from '@arke-institute/rhiza';
 import type {
   Env,
   TargetProperties,
@@ -19,6 +21,37 @@ import { callGemini } from './gemini';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts';
 import { parseOperations, collectReferencedLabels } from './parse';
 import { batchCheckCreate } from './check-create';
+
+/**
+ * Context provided to processJob
+ */
+export interface ProcessContext {
+  /** The original request */
+  request: KladosRequest;
+
+  /** Arke client for API calls */
+  client: ArkeClient;
+
+  /** Logger for messages (stored in the klados_log) */
+  logger: KladosLogger;
+
+  /** SQLite storage for checkpointing long operations */
+  sql: SqlStorage;
+
+  /** Worker environment bindings (secrets, vars, DO namespaces) */
+  env: Env;
+}
+
+/**
+ * Result returned from processJob
+ */
+export interface ProcessResult {
+  /** Output entity IDs (or OutputItems with routing properties) */
+  outputs?: Output[];
+
+  /** If true, DO will reschedule alarm and call processJob again */
+  reschedule?: boolean;
+}
 
 /**
  * Maximum text size (500KB)
@@ -39,17 +72,22 @@ const UPDATE_BATCH_SIZE = 1000;
  * Fetch text content from entity (either from properties or content endpoint)
  */
 async function fetchTextContent(
-  job: KladosJob,
+  client: ArkeClient,
   entityId: string,
   properties: TargetProperties
 ): Promise<string | null> {
-  // Prefer properties.content if available
+  // Prefer properties.text if available
+  if (properties.text && typeof properties.text === 'string') {
+    return properties.text;
+  }
+
+  // Fall back to properties.content for backward compatibility
   if (properties.content && typeof properties.content === 'string') {
     return properties.content;
   }
 
   // Try fetching from content endpoint
-  const { data, error } = await job.client.api.GET('/entities/{id}/content', {
+  const { data, error } = await client.api.GET('/entities/{id}/content', {
     params: {
       path: { id: entityId },
       query: { key: 'content' },
@@ -70,14 +108,37 @@ async function fetchTextContent(
 
 /**
  * Build updates for /updates/additive from parsed operations
+ *
+ * Consolidates ALL updates per entity:
+ * - Properties from LLM
+ * - Outgoing relationships from LLM
+ * - extracted_from → source chunk (for provenance)
+ * - referenced_by → for orphan entities (only targets, no subjects)
  */
 function buildUpdates(
   operations: ParsedOperations,
   labelToId: Map<string, string>,
-  sourceRef: SourceRef
+  sourceRef: SourceRef,
+  sourceChunkId: string
 ): AdditiveUpdate[] {
-  // Group updates by entity ID
+  // Track all updates by entity ID
   const updatesByEntity = new Map<string, AdditiveUpdate>();
+
+  // Helper to get or create update for an entity
+  const getUpdate = (entityId: string): AdditiveUpdate => {
+    if (!updatesByEntity.has(entityId)) {
+      updatesByEntity.set(entityId, {
+        entity_id: entityId,
+        properties: {},
+        relationships_add: [],
+      });
+    }
+    return updatesByEntity.get(entityId)!;
+  };
+
+  // Track which entities are subjects vs only targets
+  const subjects = new Set<string>();
+  const targets = new Set<string>();
 
   // Process property operations
   for (const propOp of operations.properties) {
@@ -87,15 +148,7 @@ function buildUpdates(
       continue;
     }
 
-    if (!updatesByEntity.has(entityId)) {
-      updatesByEntity.set(entityId, {
-        entity_id: entityId,
-        properties: {},
-        relationships_add: [],
-      });
-    }
-
-    const update = updatesByEntity.get(entityId)!;
+    const update = getUpdate(entityId);
     update.properties![propOp.key] = propOp.value;
   }
 
@@ -117,15 +170,11 @@ function buildUpdates(
       continue;
     }
 
-    if (!updatesByEntity.has(subjectId)) {
-      updatesByEntity.set(subjectId, {
-        entity_id: subjectId,
-        properties: {},
-        relationships_add: [],
-      });
-    }
+    subjects.add(subjectId);
+    targets.add(targetId);
 
-    const update = updatesByEntity.get(subjectId)!;
+    // Add outgoing relationship to subject
+    const update = getUpdate(subjectId);
     update.relationships_add!.push({
       predicate: relOp.predicate,
       peer: targetId,
@@ -137,6 +186,44 @@ function buildUpdates(
         source_text: relOp.source_text,
         confidence: relOp.confidence ?? 1.0,
         context: relOp.context,
+      },
+    });
+  }
+
+  // Add referenced_by for orphan targets (targets that aren't subjects)
+  // This ensures every entity has at least one meaningful outgoing relationship
+  for (const relOp of operations.relationships) {
+    const subjectId = labelToId.get(relOp.subject);
+    const targetId = labelToId.get(relOp.target);
+    if (!subjectId || !targetId) continue;
+
+    // If target has no outgoing relationships, add referenced_by
+    if (!subjects.has(targetId)) {
+      const update = getUpdate(targetId);
+      update.relationships_add!.push({
+        predicate: 'referenced_by',
+        peer: subjectId,
+        peer_label: relOp.subject,
+        direction: 'outgoing',
+        properties: {
+          context: relOp.predicate, // What kind of reference
+          source_text: relOp.source_text,
+          source: sourceRef,
+        },
+      });
+    }
+  }
+
+  // Add extracted_from to ALL entities (enables traversal back to source chunk)
+  for (const [entityId, update] of updatesByEntity) {
+    update.relationships_add!.push({
+      predicate: 'extracted_from',
+      peer: sourceChunkId,
+      peer_label: sourceRef.label,
+      direction: 'outgoing',
+      properties: {
+        extracted_at: new Date().toISOString(),
+        source: sourceRef,
       },
     });
   }
@@ -154,7 +241,7 @@ interface AdditiveResponse {
 /**
  * Fire updates via /updates/additive (fire-and-forget)
  */
-async function fireUpdates(job: KladosJob, updates: AdditiveUpdate[]): Promise<void> {
+async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promise<void> {
   if (updates.length === 0) return;
 
   // Batch if > 1000 (API limit)
@@ -163,7 +250,7 @@ async function fireUpdates(job: KladosJob, updates: AdditiveUpdate[]): Promise<v
 
     // Fire and forget - don't await completion
     // Note: /updates/additive is not yet typed in SDK
-    (job.client.api.POST as Function)('/updates/additive', {
+    (client.api.POST as Function)('/updates/additive', {
       body: { updates: batch },
     })
       .then((result: { error?: unknown; data?: AdditiveResponse }) => {
@@ -182,53 +269,63 @@ async function fireUpdates(job: KladosJob, updates: AdditiveUpdate[]): Promise<v
 /**
  * Process a job and return output entity IDs (newly created entities only)
  */
-export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
+export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
+  const { request, client, logger, env } = ctx;
+
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: Fetch Target Content
   // ═══════════════════════════════════════════════════════════════════════════
-  job.log.info('Starting extraction');
+  logger.info('Starting extraction');
 
-  const target = await job.fetchTarget<TargetProperties>();
-  const text = await fetchTextContent(job, target.id, target.properties);
+  if (!request.target_entity) {
+    throw new Error('No target_entity in request');
+  }
+
+  const { data: target, error: fetchError } = await client.api.GET('/entities/{id}', {
+    params: { path: { id: request.target_entity } },
+  });
+
+  if (fetchError || !target) {
+    throw new Error(`Failed to fetch target: ${request.target_entity}`);
+  }
+
+  const properties = target.properties as TargetProperties;
+  const text = await fetchTextContent(client, target.id, properties);
 
   if (!text || text.length < 50) {
-    throw createKladosError(
-      KladosErrorCode.INVALID_INPUT,
-      'Target entity has no text content or content is too short'
-    );
+    throw new Error('Target entity has no text content or content is too short');
   }
 
   if (text.length > MAX_TEXT_SIZE) {
-    throw createKladosError(
-      KladosErrorCode.INVALID_INPUT,
+    throw new Error(
       `Text content exceeds maximum size (${Math.round(text.length / 1024)}KB > ${MAX_TEXT_SIZE / 1024}KB)`
     );
   }
 
   if (text.length > WARN_TEXT_SIZE) {
-    job.log.info('Large text content', { sizeKB: Math.round(text.length / 1024) });
+    logger.info('Large text content', { sizeKB: Math.round(text.length / 1024) });
   }
 
-  job.log.info('Fetched target', {
+  logger.info('Fetched target', {
     id: target.id,
     type: target.type,
-    label: target.properties.label,
+    label: properties.label,
     textLength: text.length,
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: Call Gemini
   // ═══════════════════════════════════════════════════════════════════════════
-  job.log.info('Calling Gemini');
+  logger.info('Calling Gemini');
 
-  const sourceLabel = target.properties.label || 'Source';
+  const sourceLabel = properties.label || 'Source';
   const response = await callGemini(
     SYSTEM_PROMPT,
     buildUserPrompt(text, { id: target.id, label: sourceLabel }),
     env.GEMINI_API_KEY
   );
 
-  job.log.info('Gemini response received', {
+  logger.info('Gemini response received', {
     tokens: response.tokens,
     promptTokens: response.prompt_tokens,
     completionTokens: response.completion_tokens,
@@ -242,12 +339,11 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
   try {
     operations = parseOperations(response.content);
   } catch (e) {
-    job.log.error('Failed to parse LLM response', {
+    logger.error('Failed to parse LLM response', {
       error: e instanceof Error ? e.message : String(e),
       responsePreview: response.content.slice(0, 500),
     });
-    throw createKladosError(
-      KladosErrorCode.PROCESSING_ERROR,
+    throw new Error(
       `Failed to parse LLM response: ${e instanceof Error ? e.message : e}`
     );
   }
@@ -262,7 +358,7 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
     }
   }
 
-  job.log.info('Parsed operations', {
+  logger.info('Parsed operations', {
     creates: operations.creates.length,
     properties: operations.properties.length,
     relationships: operations.relationships.length,
@@ -270,15 +366,15 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
 
   // Handle empty extraction
   if (operations.creates.length === 0) {
-    job.log.info('No entities to extract');
-    job.log.success('Extraction complete (no entities)');
-    return [];
+    logger.info('No entities to extract');
+    logger.success('Extraction complete (no entities)');
+    return { outputs: [] };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 4: Check-Create Entities (SYNCHRONOUS)
   // ═══════════════════════════════════════════════════════════════════════════
-  job.log.info('Check-creating entities', { count: operations.creates.length });
+  logger.info('Check-creating entities', { count: operations.creates.length });
 
   const entitiesToCreate = operations.creates.map((c) => ({
     label: c.label,
@@ -286,8 +382,8 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
   }));
 
   const results = await batchCheckCreate(
-    job.client,
-    job.request.target_collection,
+    client,
+    request.target_collection,
     entitiesToCreate
   );
 
@@ -302,7 +398,7 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
     }
   }
 
-  job.log.info('Check-create complete', {
+  logger.info('Check-create complete', {
     total: results.length,
     new: newEntityIds.length,
     existing: results.length - newEntityIds.length,
@@ -317,7 +413,7 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
     label: sourceLabel,
   };
 
-  const updates = buildUpdates(operations, labelToId, sourceRef);
+  const updates = buildUpdates(operations, labelToId, sourceRef, target.id);
 
   // Add source → extracted entity relationships (enables traversal from source text)
   if (results.length > 0) {
@@ -336,6 +432,21 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
     });
   }
 
+  // Add collection → chunk relationship (enables auditing which chunks were processed)
+  updates.push({
+    entity_id: request.target_collection,
+    relationships_add: [{
+      predicate: 'contains',
+      peer: target.id,
+      peer_label: sourceLabel,
+      direction: 'outgoing' as const,
+      properties: {
+        relationship_type: 'processed_chunk',
+        processed_at: new Date().toISOString(),
+      },
+    }],
+  });
+
   if (updates.length > 0) {
     const totalRelationships = updates.reduce(
       (sum, u) => sum + (u.relationships_add?.length || 0),
@@ -346,24 +457,24 @@ export async function processJob(job: KladosJob, env: Env): Promise<string[]> {
       0
     );
 
-    job.log.info('Firing updates via /updates/additive', {
+    logger.info('Firing updates via /updates/additive', {
       entityCount: updates.length,
       properties: totalProperties,
       relationships: totalRelationships,
     });
 
-    await fireUpdates(job, updates);
+    await fireUpdates(client, updates);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 6: Return New Entity IDs for Handoff
   // ═══════════════════════════════════════════════════════════════════════════
-  job.log.success('Extraction complete', {
+  logger.success('Extraction complete', {
     totalEntities: results.length,
     newEntities: newEntityIds.length,
     existingEntities: results.length - newEntityIds.length,
   });
 
   // Only pass NEW entities to next step
-  return newEntityIds;
+  return { outputs: newEntityIds };
 }

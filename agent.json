@@ -1,7 +1,7 @@
 {
-  "label": "KG Extractor",
-  "description": "Extracts entities and relationships from text using Gemini and creates them in the knowledge graph",
-  "endpoint": "https://kg-extractor.nick-chimicles-professional.workers.dev",
+  "label": "KG Extractor v2",
+  "description": "Extracts entities and relationships from text using Gemini (Durable Object based for long-running operations)",
+  "endpoint": "https://kg-extractor-v2.nick-chimicles-professional.workers.dev",
   "actions_required": ["entity:view", "entity:create", "entity:update", "entity:delete"],
   "accepts": {
     "types": ["text_chunk", "document", "*"],

@@ -1,18 +1,21 @@
 /**
- * KG Extractor Worker - Knowledge Graph Entity Extraction
+ * Klados DO Worker - Durable Object template for long-running Arke workflows
  *
- * This worker extracts entities and relationships from text using Gemini,
- * creates them in Arke, and passes newly-created entities to the next
- * workflow step.
+ * This template provides a Tier 2 klados worker that uses Durable Objects:
+ * 1. Accepts job requests from Arke and returns immediately
+ * 2. Hands off processing to a Durable Object
+ * 3. DO uses alarms for processing (no 30s CPU limit)
+ * 4. Supports checkpointing for very long operations
  *
- * Two-phase processing:
- * 1. Sync: Gemini extraction + check-create entities (determines handoff)
- * 2. Async: Fire updates via /updates/additive (fire-and-forget)
+ * Use this template when your processing needs:
+ * - More than 30 seconds of CPU time
+ * - More than 1000 sub-requests
+ * - State persistence across multiple processing phases
  */
 
 import { Hono } from 'hono';
-import { KladosJob, type KladosRequest } from '@arke-institute/rhiza';
-import { processJob } from './job';
+import type { KladosRequest, KladosResponse } from '@arke-institute/rhiza';
+import { KladosJobDO } from './job-do';
 import type { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -25,15 +28,21 @@ app.get('/health', (c) => {
     status: 'ok',
     agent_id: c.env.AGENT_ID,
     version: c.env.AGENT_VERSION,
+    tier: 2,
   });
 });
 
 /**
  * Arke verification endpoint
  * Required to verify ownership of this endpoint before activating the klados.
+ * Returns the verification token provided during registration.
+ *
+ * Uses ARKE_VERIFY_AGENT_ID during initial verification (before AGENT_ID is set),
+ * then falls back to AGENT_ID for subsequent verifications.
  */
 app.get('/.well-known/arke-verification', (c) => {
   const token = c.env.VERIFICATION_TOKEN;
+  // Use verification-specific agent ID if set, otherwise fall back to main AGENT_ID
   const kladosId = c.env.ARKE_VERIFY_AGENT_ID || c.env.AGENT_ID;
 
   if (!token || !kladosId) {
@@ -47,82 +56,38 @@ app.get('/.well-known/arke-verification', (c) => {
 });
 
 /**
- * Debug endpoint to check environment (remove in production)
- */
-app.get('/debug/env', (c) => {
-  return c.json({
-    agent_id: c.env.AGENT_ID || '(not set)',
-    agent_version: c.env.AGENT_VERSION || '(not set)',
-    arke_agent_key: c.env.ARKE_AGENT_KEY ? `${c.env.ARKE_AGENT_KEY.slice(0, 10)}...` : '(not set)',
-    gemini_api_key: c.env.GEMINI_API_KEY ? `${c.env.GEMINI_API_KEY.slice(0, 10)}...` : '(not set)',
-  });
-});
-
-/**
  * Main job processing endpoint
- * The API calls POST /process to invoke the klados
+ *
+ * Unlike Tier 1, this hands off to a Durable Object instead of using waitUntil.
+ * The DO schedules an alarm for immediate processing and can reschedule
+ * for long-running operations.
  */
 app.post('/process', async (c) => {
-  const rawReq = await c.req.json<KladosRequest>();
-  const env = c.env;
+  const req = await c.req.json<KladosRequest>();
 
-  // Override api_base if it's the non-v1 URL (platform sends wrong URL)
-  const req: KladosRequest = {
-    ...rawReq,
-    api_base: rawReq.api_base === 'https://api.arke.institute'
-      ? 'https://arke-v1.arke.institute'
-      : rawReq.api_base,
-  };
+  // Get DO instance by job_id (deterministic - same job_id always gets same DO)
+  const doId = c.env.KLADOS_JOB.idFromName(req.job_id);
+  const doStub = c.env.KLADOS_JOB.get(doId);
 
-  // Log incoming request for debugging
-  console.log('[KG Extractor] Received request:', JSON.stringify({
-    job_id: req.job_id,
-    target_entity: req.target_entity,
-    target_collection: req.target_collection,
-    job_collection: req.job_collection,
-    api_base: req.api_base,
-    original_api_base: rawReq.api_base,
-    network: req.network,
-    has_rhiza: !!req.rhiza,
-  }));
-
-  // Validate required secrets
-  if (!env.GEMINI_API_KEY) {
-    console.error('[KG Extractor] GEMINI_API_KEY not configured');
-    return c.json({ error: 'GEMINI_API_KEY not configured' }, 500);
-  }
-  if (!env.ARKE_AGENT_KEY) {
-    console.error('[KG Extractor] ARKE_AGENT_KEY not configured');
-    return c.json({ error: 'ARKE_AGENT_KEY not configured' }, 500);
-  }
-
-  console.log('[KG Extractor] Creating KladosJob with agentId:', env.AGENT_ID);
-
-  // Accept the job immediately
-  const job = KladosJob.accept(req, {
-    agentId: env.AGENT_ID,
-    agentVersion: env.AGENT_VERSION,
-    authToken: env.ARKE_AGENT_KEY,
-  });
-
-  console.log('[KG Extractor] Job accepted, logId:', job.logId);
-
-  // Process in background - KladosJob handles:
-  // - Writing initial log entry
-  // - Catching errors and updating log + batch slot
-  // - Executing workflow handoffs
-  // - Finalizing log on completion
-  c.executionCtx.waitUntil(
-    job.run(async () => {
-      return await processJob(job, env);
-    }).catch((err) => {
-      // Log any errors that escape KladosJob
-      console.error('[KG Extractor] Fatal error in job.run():', err);
+  // Start the job in the DO
+  const response = await doStub.fetch(
+    new Request('https://do/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request: req,
+        config: {
+          agentId: c.env.AGENT_ID,
+          agentVersion: c.env.AGENT_VERSION,
+          authToken: c.env.ARKE_AGENT_KEY,
+        },
+      }),
     })
   );
 
-  // Return acceptance immediately
-  return c.json(job.acceptResponse);
+  return c.json(await response.json() as KladosResponse);
 });
 
+// Export the DO class (required for Cloudflare)
+export { KladosJobDO };
 export default app;

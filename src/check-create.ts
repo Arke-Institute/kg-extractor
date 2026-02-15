@@ -84,7 +84,7 @@ async function lookupAllByLabel(
 }
 
 /**
- * Create a new entity
+ * Create a new entity with sync_index for race condition handling
  */
 async function createEntity(
   client: ArkeClient,
@@ -94,11 +94,13 @@ async function createEntity(
 ): Promise<{ id: string; created_at: string }> {
   console.log(`[check-create] Creating entity: "${label}" (${type}) in ${collection}`);
 
-  const { data, error } = await client.api.POST('/entities', {
+  // Note: sync_index not yet typed in SDK, use type assertion
+  const { data, error } = await (client.api.POST as Function)('/entities', {
     body: {
       type,
       collection,
       properties: { label },
+      sync_index: true, // Wait for index before returning - prevents race conditions
     },
   });
 
@@ -128,13 +130,21 @@ async function deleteEntity(client: ArkeClient, entityId: string): Promise<void>
 }
 
 /**
+ * Delay with optional jitter
+ */
+function delay(ms: number, jitter = 0): Promise<void> {
+  const jitterMs = jitter > 0 ? Math.random() * jitter : 0;
+  return new Promise((resolve) => setTimeout(resolve, ms + jitterMs));
+}
+
+/**
  * Check if entity exists by normalized label, create if not.
- * Handles race conditions via check-create-check-delete pattern.
+ * Handles race conditions via check-create-check-delete pattern with retry.
  *
- * Max 4 API calls per entity:
+ * Max 5 API calls per entity:
  * - Best case: 1 (check, exists)
  * - Common case: 2 (check, create)
- * - Rare case: 4 (check, create, check again, delete)
+ * - Race case: 4-5 (check, create, check again [+ retry], delete)
  */
 export async function checkCreate(
   client: ArkeClient,
@@ -147,14 +157,26 @@ export async function checkCreate(
   // Step 1: Check if exists
   const existing = await lookupByLabel(client, collection, normalizedLabel, type);
   if (existing) {
-    return { entityId: existing.id, isNew: false, label, type };
+    return { entityId: existing.id, isNew: false, label: normalizedLabel, type };
   }
 
-  // Step 2: Create
-  const created = await createEntity(client, collection, type, label);
+  // Step 2: Create with normalized label (sync_index ensures it's indexed before returning)
+  const created = await createEntity(client, collection, type, normalizedLabel);
 
-  // Step 3: Check again for race condition
-  const allMatches = await lookupAllByLabel(client, collection, normalizedLabel, type);
+  // Step 3: Wait for any concurrent creations to finish indexing
+  // sync_index ensures our entity is indexed, but other workers might be mid-creation
+  // Add jitter (0-100ms) to desynchronize concurrent workers
+  await delay(100, 100);
+
+  // Step 4: Check again for race condition
+  let allMatches = await lookupAllByLabel(client, collection, normalizedLabel, type);
+
+  // If we only see our entity, retry up to 2 more times to catch concurrent creates
+  // This handles cases where multiple workers are creating the same entity simultaneously
+  for (let retry = 0; retry < 2 && allMatches.length === 1 && allMatches[0].id === created.id; retry++) {
+    await delay(150, 100);
+    allMatches = await lookupAllByLabel(client, collection, normalizedLabel, type);
+  }
 
   if (allMatches.length > 1) {
     // Race! Multiple entities with same label. Keep earliest by created_at, then by id.
@@ -164,17 +186,17 @@ export async function checkCreate(
     const winner = sorted[0];
 
     if (winner.id !== created.id) {
-      // Step 4: We lost - delete our duplicate
+      // Step 5: We lost - delete our duplicate
       console.log(
-        `[check-create] Race detected for "${label}" (${type}), deleting duplicate ${created.id}, keeping ${winner.id}`
+        `[check-create] Race detected for "${normalizedLabel}" (${type}), deleting duplicate ${created.id}, keeping ${winner.id}`
       );
       await deleteEntity(client, created.id);
-      return { entityId: winner.id, isNew: false, label, type };
+      return { entityId: winner.id, isNew: false, label: normalizedLabel, type };
     }
   }
 
   // We won (or no race)
-  return { entityId: created.id, isNew: true, label, type };
+  return { entityId: created.id, isNew: true, label: normalizedLabel, type };
 }
 
 /**

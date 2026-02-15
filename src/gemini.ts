@@ -80,7 +80,7 @@ export async function callGemini(
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     generationConfig: {
-      maxOutputTokens: 32768,
+      maxOutputTokens: 65536,
       temperature: 0.7,
       responseMimeType: 'application/json',
     },
@@ -129,6 +129,11 @@ export async function callGemini(
       const finishReason = (data as { candidates?: Array<{ finishReason?: string }> })
         .candidates?.[0]?.finishReason;
       console.log(`[Gemini] Finish reason: ${finishReason}`);
+
+      // Warn if output may be truncated
+      if (finishReason === 'MAX_TOKENS') {
+        console.warn('[Gemini] WARNING: Output truncated due to max tokens limit');
+      }
 
       return parseGeminiResponse(data);
     } catch (error) {

@@ -1,33 +1,27 @@
 /**
  * Label normalization for entity deduplication
+ *
+ * Note: The Arke lookup API uses exact match (case-insensitive only).
+ * We normalize labels before storing to ensure deduplication works.
  */
-
-const COMMON_PREFIXES = ['the', 'a', 'an', 'captain', 'mr', 'mrs', 'dr', 'prof'];
 
 /**
- * Normalize a label for deduplication matching.
+ * Normalize a label for deduplication matching AND storage.
  *
  * - Lowercase
- * - Remove common prefixes (the, a, an, captain, mr, etc.)
- * - Remove punctuation
+ * - Remove punctuation (except hyphens within words)
  * - Collapse whitespace
+ * - Trim
+ *
+ * NOTE: We do NOT strip prefixes like "the", "a", "captain" because:
+ * 1. It can cause semantic ambiguity (e.g., "The Pequod" vs "Pequod")
+ * 2. The lookup API does exact match, so we'd lose findability
  */
 export function normalizeLabel(label: string): string {
-  let normalized = label.toLowerCase().trim();
-
-  // Remove common prefixes
-  for (const prefix of COMMON_PREFIXES) {
-    if (normalized.startsWith(prefix + ' ')) {
-      normalized = normalized.slice(prefix.length + 1);
-      break; // Only remove one prefix
-    }
-  }
-
-  // Remove punctuation, collapse whitespace
-  normalized = normalized
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, ' ')
+  return label
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')  // Remove punctuation except hyphens
+    .replace(/\s+/g, ' ')       // Collapse whitespace
     .trim();
-
-  return normalized;
 }

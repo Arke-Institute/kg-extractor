@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
-  "name": "kg-extractor",
+  "name": "kg-extractor-v2",
   "main": "src/index.ts",
   "compatibility_date": "2024-12-30",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,14 +10,25 @@
     "enabled": true
   },
 
+  // Durable Object binding
+  "durable_objects": {
+    "bindings": [
+      { "name": "KLADOS_JOB", "class_name": "KladosJobDO" }
+    ]
+  },
+
+  // SQL storage for DO (required for SQL-backed DOs)
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["KladosJobDO"] }
+  ],
+
   // Environment variables (non-secret)
   "vars": {
-    "AGENT_ID": "IIKH7C1X6PYDDB9WGZXFMES129",
-    "AGENT_VERSION": "0.1.0"
+    "AGENT_ID": "IIKH9PJ2RXCWARWT0CY5D6ZSK6",
+    "AGENT_VERSION": "2.0.0"
   }
 
   // Secrets (set via `wrangler secret put`):
   // - ARKE_AGENT_KEY: Your agent API key (ak_...)
-  // - GEMINI_API_KEY: Google Gemini API key
-  // - VERIFICATION_TOKEN: Arke verification token (during registration)
+  // - GEMINI_API_KEY: Your Gemini API key
 }

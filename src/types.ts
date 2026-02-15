@@ -1,17 +1,31 @@
 /**
- * Type definitions for the KG Extractor worker
+ * Type definitions for the KG Extractor v2 worker (Durable Object based)
  */
 
 /**
- * Environment variables available to the worker
+ * Cloudflare Worker environment bindings
  */
 export interface Env {
+  /** Klados agent ID (registered in Arke) */
   AGENT_ID: string;
+
+  /** Agent version for logging */
   AGENT_VERSION: string;
+
+  /** Arke agent API key (secret) */
   ARKE_AGENT_KEY: string;
+
+  /** Gemini API key for LLM calls (secret) */
   GEMINI_API_KEY: string;
+
+  /** Verification token for endpoint verification (set during registration) */
   VERIFICATION_TOKEN?: string;
+
+  /** Agent ID for verification (used before AGENT_ID is configured) */
   ARKE_VERIFY_AGENT_ID?: string;
+
+  /** Durable Object binding for job processing */
+  KLADOS_JOB: DurableObjectNamespace;
 }
 
 /**
@@ -19,7 +33,8 @@ export interface Env {
  */
 export interface TargetProperties {
   label?: string;
-  content?: string;
+  text?: string;
+  content?: string; // Deprecated - use text instead
   [key: string]: unknown;
 }
 

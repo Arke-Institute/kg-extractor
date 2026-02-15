@@ -1,8 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * KG Extractor Registration Script
+ * Klados DO Registration Script
  *
- * Automated registration flow using @arke-institute/rhiza registration module.
+ * Automated registration flow using @arke-institute/rhiza registration module:
+ * - Creates new klados with verification and API key
+ * - Updates existing klados, re-verifying if endpoint changes
+ * - Supports dry-run mode to preview changes
  *
  * Usage:
  *   ARKE_USER_KEY=uk_... npx tsx scripts/register.ts              # Test network
@@ -25,10 +28,9 @@ import {
   type KeyStore,
 } from '@arke-institute/rhiza/registration';
 
-// =============================================================================
-// CloudflareKeyStore - Inline implementation
-// =============================================================================
-
+/**
+ * CloudflareKeyStore - Uses wrangler CLI to manage secrets
+ */
 class CloudflareKeyStore implements KeyStore {
   private cwd: string;
 
@@ -37,8 +39,7 @@ class CloudflareKeyStore implements KeyStore {
   }
 
   async get(_name: string): Promise<string | null> {
-    // Cloudflare doesn't support reading secrets via CLI
-    return null;
+    return null; // Cloudflare doesn't support reading secrets via CLI
   }
 
   async set(name: string, value: string): Promise<void> {
@@ -60,7 +61,7 @@ class CloudflareKeyStore implements KeyStore {
   }
 
   async exists(_name: string): Promise<boolean> {
-    return false;
+    return false; // Cloudflare doesn't support checking if a secret exists
   }
 }
 
@@ -110,6 +111,7 @@ function updateWranglerConfig(kladosId: string): boolean {
     if (!existsSync(wranglerPath)) return false;
 
     let content = readFileSync(wranglerPath, 'utf-8');
+    // Replace AGENT_ID placeholder or existing value
     content = content.replace(/"AGENT_ID":\s*"[^"]*"/, `"AGENT_ID": "${kladosId}"`);
     writeFileSync(wranglerPath, content);
     return true;
@@ -143,9 +145,7 @@ async function main() {
   const isDryRun = process.argv.includes('--dry-run');
   const network = isProduction ? 'main' : 'test';
 
-  console.log(
-    `\n📦 KG Extractor Registration (${network} network)${isDryRun ? ' [DRY RUN]' : ''}\n`
-  );
+  console.log(`\n📦 Klados DO Registration (${network} network)${isDryRun ? ' [DRY RUN]' : ''}\n`);
 
   // Load agent config
   if (!existsSync('agent.json')) {
