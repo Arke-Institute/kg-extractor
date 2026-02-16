@@ -21,6 +21,7 @@ import { callGemini } from './gemini';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts';
 import { parseOperations, collectReferencedLabels } from './parse';
 import { batchCheckCreate } from './check-create';
+import { normalizeLabel } from './normalize';
 
 /**
  * Context provided to processJob
@@ -142,7 +143,7 @@ function buildUpdates(
 
   // Process property operations
   for (const propOp of operations.properties) {
-    const entityId = labelToId.get(propOp.entity);
+    const entityId = labelToId.get(normalizeLabel(propOp.entity));
     if (!entityId) {
       console.warn(`[buildUpdates] No entity ID for label "${propOp.entity}", skipping property`);
       continue;
@@ -154,8 +155,8 @@ function buildUpdates(
 
   // Process relationship operations
   for (const relOp of operations.relationships) {
-    const subjectId = labelToId.get(relOp.subject);
-    const targetId = labelToId.get(relOp.target);
+    const subjectId = labelToId.get(normalizeLabel(relOp.subject));
+    const targetId = labelToId.get(normalizeLabel(relOp.target));
 
     if (!subjectId) {
       console.warn(
@@ -193,8 +194,8 @@ function buildUpdates(
   // Add referenced_by for orphan targets (targets that aren't subjects)
   // This ensures every entity has at least one meaningful outgoing relationship
   for (const relOp of operations.relationships) {
-    const subjectId = labelToId.get(relOp.subject);
-    const targetId = labelToId.get(relOp.target);
+    const subjectId = labelToId.get(normalizeLabel(relOp.subject));
+    const targetId = labelToId.get(normalizeLabel(relOp.target));
     if (!subjectId || !targetId) continue;
 
     // If target has no outgoing relationships, add referenced_by
@@ -349,12 +350,15 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   }
 
   // Auto-create implicitly referenced entities (mentioned in properties/relationships but not created)
+  // Use normalized labels to handle case differences (LLM might output "Night" in relationship but "night" in create)
   const allLabels = collectReferencedLabels(operations);
-  const explicitLabels = new Set(operations.creates.map((c) => c.label));
+  const explicitLabels = new Set(operations.creates.map((c) => normalizeLabel(c.label)));
 
   for (const label of allLabels) {
-    if (!explicitLabels.has(label)) {
-      operations.creates.push({ op: 'create', label, entity_type: 'entity' });
+    const normalized = normalizeLabel(label);
+    if (!explicitLabels.has(normalized)) {
+      explicitLabels.add(normalized); // Prevent duplicate auto-creates for case variants
+      operations.creates.push({ op: 'create', label: normalized, entity_type: 'entity' });
     }
   }
 

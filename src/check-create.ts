@@ -99,7 +99,10 @@ async function createEntity(
     body: {
       type,
       collection,
-      properties: { label },
+      properties: {
+        label,
+        _kg_layer: 0, // Layer 0 = raw extracted entities (enables semantic search filtering for clustering)
+      },
       sync_index: true, // Wait for index before returning - prevents race conditions
     },
   });
