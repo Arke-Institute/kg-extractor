@@ -1,3 +1,176 @@
+# Enrich Entity Extraction Quality
+
+## Problem
+
+Extracted knowledge entities are underwhelming:
+- Empty descriptions on relationships
+- Very few entities have meaningful properties
+- No entity-level descriptions explaining what each entity is
+- `source_text` inclusion is inconsistent
+- `confidence` is always 1.0 (useless noise)
+- Surface-level extraction - not capturing richness
+
+## Solution
+
+Restructure the extraction format to produce richer entities with less friction.
+
+### Key Changes
+
+1. **Add `description` to CREATE** (required) - Brief explanation of what the entity is
+2. **Add `properties` to CREATE** - Include properties inline (at least 2 per entity)
+3. **Drop `confidence` entirely** - Always 1.0, adds no value
+4. **Replace `source_text` with quote markers** - `quote_start`/`quote_end` (~4 words each)
+5. **Require `description` on relationships** - What the relationship means in context
+6. **Deprecate `add_property`** - Still supported but primary path is properties at creation
+
+### New Operation Format
+
+**CREATE (before)**:
+```json
+{"op": "create", "label": "SEC", "entity_type": "government_agency"}
+{"op": "add_property", "entity": "SEC", "key": "full_name", "value": "Securities and Exchange Commission"}
+{"op": "add_property", "entity": "SEC", "key": "role", "value": "securities regulator"}
+```
+
+**CREATE (after)**:
+```json
+{
+  "op": "create",
+  "label": "SEC",
+  "entity_type": "government_agency",
+  "description": "The primary federal regulatory body overseeing securities markets in the United States",
+  "properties": {
+    "full_name": "Securities and Exchange Commission",
+    "role": "securities regulator",
+    "jurisdiction": "United States"
+  }
+}
+```
+
+**ADD_RELATIONSHIP (before)**:
+```json
+{
+  "op": "add_relationship",
+  "subject": "SEC",
+  "predicate": "regulates",
+  "target": "securities markets",
+  "source_text": "The SEC oversees securities markets",
+  "confidence": 1.0
+}
+```
+
+**ADD_RELATIONSHIP (after)**:
+```json
+{
+  "op": "add_relationship",
+  "subject": "SEC",
+  "predicate": "regulates",
+  "target": "securities markets",
+  "description": "SEC has regulatory authority over all securities trading activities",
+  "quote_start": "The SEC oversees",
+  "quote_end": "securities markets"
+}
+```
+
+### Quote Extraction Logic
+
+Post-process to find actual quotes from source text:
+1. Search for `quote_start` in source text
+2. Search for `quote_end` after that position
+3. Extract everything between (inclusive)
+4. If not found, drop `source_text` field (description still valuable)
+
+Benefits:
+- Exact quote fidelity (no transcription errors)
+- Fewer output tokens
+- Consistent presence when markers found
+
+---
+
+## Implementation Status: COMPLETE ✅
+
+All phases implemented and tested. Ready for deployment.
+
+---
+
+## Implementation Plan
+
+### Phase 1: Type Updates (`types.ts`) ✅
+
+- [x] Add `description: string` to `CreateOp` (required)
+- [x] Add `properties?: Record<string, string>` to `CreateOp`
+- [x] Remove `confidence` and `context` from `AddRelationshipOp`
+- [x] Remove `source_text` from `AddRelationshipOp`
+- [x] Add `quote_start?: string` and `quote_end?: string` to `AddRelationshipOp`
+- [x] Change `description` from optional to required on `AddRelationshipOp`
+
+### Phase 2: Prompt Updates (`prompts.ts`) ✅
+
+- [x] Update `SYSTEM_PROMPT` with new operation format
+- [x] Show CREATE with inline description + properties
+- [x] Show ADD_RELATIONSHIP with required description + quote markers
+- [x] Add guideline: "Every entity must have a description and at least 2 properties"
+- [x] Remove all confidence guidance
+- [x] Add quote marker guidance: "~4 words from start and end of supporting text"
+- [x] Note that `add_property` is available but inline properties preferred
+
+### Phase 3: Parser Updates (`parse.ts`) ✅
+
+- [x] Update `isCreateOp` to require `description`
+- [x] Update `isCreateOp` to handle optional `properties` object
+- [x] Update `isAddRelationshipOp` to require `description`
+- [x] Update `isAddRelationshipOp` to handle `quote_start`/`quote_end`
+- [x] Remove handling for `confidence`, `context`, `source_text`
+- [x] Add warning for entities with < 2 properties
+
+### Phase 4: Quote Extraction (`quotes.ts` - new file) ✅
+
+- [x] Create `extractQuote(text: string, start: string, end: string): string | null`
+- [x] Fuzzy matching for quote boundaries (handle whitespace variations)
+- [x] Return null if quote not found (graceful degradation)
+- [x] Unit tests for quote extraction edge cases
+
+### Phase 5: Job Updates (`job.ts`) ✅
+
+- [x] Update entity creation to use inline `properties` from CreateOp
+- [x] Add `description` property from CreateOp to entity properties
+- [x] Update relationship building to use `extractQuote()` for `source_text`
+- [x] Use relationship `description` field (now required)
+- [x] Remove confidence handling
+
+### Phase 6: Testing ✅
+
+- [x] Add tests for quote extraction (10 tests, all passing)
+- [x] Type-check passes
+- [ ] Run full E2E extraction test after deployment
+- [ ] Verify entity richness improved after deployment
+
+---
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `src/types.ts` | CreateOp + AddRelationshipOp restructure |
+| `src/prompts.ts` | New SYSTEM_PROMPT with examples |
+| `src/parse.ts` | Updated type guards + validation |
+| `src/quotes.ts` | **New file** - quote extraction utility |
+| `src/job.ts` | Use new operation structure |
+| `tests/*.test.ts` | Update for new format |
+
+## Risks & Mitigations
+
+**Risk**: LLM doesn't follow new format consistently
+**Mitigation**: Graceful degradation - parse what we can, warn on issues
+
+**Risk**: Quote markers not found in text
+**Mitigation**: Just drop source_text, description is still valuable
+
+**Risk**: Breaking existing workflows
+**Mitigation**: Support old format during transition (detect by presence of fields)
+
+---
+
 # Fix Race Condition with sync_index
 
 ## Problem

@@ -39,28 +39,45 @@ OUTPUT FORMAT: JSON with "operations" array.
 
 OPERATION TYPES:
 
-1. CREATE - Declare an entity
-   {"op": "create", "label": "SEC", "entity_type": "government_agency"}
-
-2. ADD_PROPERTY - Add a property
-   {"op": "add_property", "entity": "SEC", "key": "full_name", "value": "Securities and Exchange Commission"}
-
-3. ADD_RELATIONSHIP - Link entities with provenance
+1. CREATE - Declare an entity with description and properties
    {
-     "op": "add_relationship",
-     "subject": "SEC",
-     "predicate": "regulates",
-     "target": "securities markets",
-     "source_text": "The SEC oversees securities markets",
-     "confidence": 1.0
+     "op": "create",
+     "label": "Captain Ahab",
+     "entity_type": "person",
+     "description": "The monomaniacal captain of the Pequod, consumed by his obsessive quest to kill Moby Dick",
+     "properties": {
+       "title": "Captain",
+       "physical_trait": "ivory leg replacing one lost to Moby Dick",
+       "origin": "Nantucket"
+     }
    }
 
+2. ADD_RELATIONSHIP - Link entities with description and quote markers
+   {
+     "op": "add_relationship",
+     "subject": "Captain Ahab",
+     "predicate": "commands",
+     "target": "Pequod",
+     "description": "Ahab serves as the authoritative captain of the whaling vessel Pequod",
+     "quote_start": "Ahab stood upon",
+     "quote_end": "his quarter-deck"
+   }
+
+REQUIREMENTS:
+- Every CREATE must include:
+  - description: 1-2 sentences explaining what this entity is
+  - properties: at least 2 properties capturing key attributes
+- Every ADD_RELATIONSHIP must include:
+  - description: what this relationship means in context (not just restating the predicate)
+  - quote_start: first ~4 words of the supporting text
+  - quote_end: last ~4 words of the supporting text
+
 GUIDELINES:
-- Create an entity BEFORE referencing it
-- Use consistent labels for the same entity
-- Include brief source_text quotes for relationships
-- Confidence: 1.0 for explicit statements, 0.7-0.8 for inferred
-- Use descriptive entity_type (e.g., "government_agency" not just "organization")
+- Create an entity BEFORE referencing it in relationships
+- Use consistent labels for the same entity throughout
+- Use descriptive entity_type (e.g., "whaling_ship" not just "ship")
+- Relationship descriptions should add context beyond the predicate name
+- Quote markers help locate the source - be precise with the boundary words
 
 TARGET: ~10-20 entities per chunk. Quality over quantity.`;
 

@@ -14,13 +14,41 @@ import type {
  * Type guard for CreateOp
  */
 function isCreateOp(op: unknown): op is CreateOp {
-  return (
-    typeof op === 'object' &&
-    op !== null &&
-    (op as { op?: string }).op === 'create' &&
-    typeof (op as { label?: string }).label === 'string' &&
-    typeof (op as { entity_type?: string }).entity_type === 'string'
-  );
+  if (
+    typeof op !== 'object' ||
+    op === null ||
+    (op as { op?: string }).op !== 'create' ||
+    typeof (op as { label?: string }).label !== 'string' ||
+    typeof (op as { entity_type?: string }).entity_type !== 'string'
+  ) {
+    return false;
+  }
+
+  const candidate = op as { description?: unknown; properties?: unknown };
+
+  // Description is required
+  if (typeof candidate.description !== 'string') {
+    console.warn('[parse] CreateOp missing required description:', (op as { label?: string }).label);
+    return false;
+  }
+
+  // Properties should be an object if present
+  if (candidate.properties !== undefined && typeof candidate.properties !== 'object') {
+    console.warn('[parse] CreateOp has invalid properties type:', (op as { label?: string }).label);
+    return false;
+  }
+
+  // Warn if fewer than 2 properties
+  if (candidate.properties) {
+    const propCount = Object.keys(candidate.properties as object).length;
+    if (propCount < 2) {
+      console.warn('[parse] CreateOp has fewer than 2 properties:', (op as { label?: string }).label, `(${propCount})`);
+    }
+  } else {
+    console.warn('[parse] CreateOp has no properties:', (op as { label?: string }).label);
+  }
+
+  return true;
 }
 
 /**
@@ -41,14 +69,37 @@ function isAddPropertyOp(op: unknown): op is AddPropertyOp {
  * Type guard for AddRelationshipOp
  */
 function isAddRelationshipOp(op: unknown): op is AddRelationshipOp {
-  return (
-    typeof op === 'object' &&
-    op !== null &&
-    (op as { op?: string }).op === 'add_relationship' &&
-    typeof (op as { subject?: string }).subject === 'string' &&
-    typeof (op as { predicate?: string }).predicate === 'string' &&
-    typeof (op as { target?: string }).target === 'string'
-  );
+  if (
+    typeof op !== 'object' ||
+    op === null ||
+    (op as { op?: string }).op !== 'add_relationship' ||
+    typeof (op as { subject?: string }).subject !== 'string' ||
+    typeof (op as { predicate?: string }).predicate !== 'string' ||
+    typeof (op as { target?: string }).target !== 'string'
+  ) {
+    return false;
+  }
+
+  const candidate = op as { description?: unknown; quote_start?: unknown; quote_end?: unknown };
+
+  // Description is required
+  if (typeof candidate.description !== 'string') {
+    const rel = op as { subject?: string; predicate?: string; target?: string };
+    console.warn('[parse] AddRelationshipOp missing required description:', `${rel.subject} -[${rel.predicate}]-> ${rel.target}`);
+    return false;
+  }
+
+  // Quote markers should be strings if present
+  if (candidate.quote_start !== undefined && typeof candidate.quote_start !== 'string') {
+    console.warn('[parse] AddRelationshipOp has invalid quote_start type');
+    return false;
+  }
+  if (candidate.quote_end !== undefined && typeof candidate.quote_end !== 'string') {
+    console.warn('[parse] AddRelationshipOp has invalid quote_end type');
+    return false;
+  }
+
+  return true;
 }
 
 /**

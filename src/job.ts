@@ -24,6 +24,7 @@ import { SYSTEM_PROMPT, buildUserPrompt } from './prompts';
 import { parseOperations, collectReferencedLabels } from './parse';
 import { batchCheckCreate } from './check-create';
 import { normalizeLabel } from './normalize';
+import { extractQuote } from './quotes';
 
 /**
  * Context provided to processJob
@@ -113,8 +114,9 @@ async function fetchTextContent(
  * Build updates for /updates/additive from parsed operations
  *
  * Consolidates ALL updates per entity:
- * - Properties from LLM
- * - Outgoing relationships from LLM
+ * - Properties from CreateOp (inline) and AddPropertyOp (deprecated)
+ * - Description from CreateOp
+ * - Outgoing relationships from LLM (with quote extraction)
  * - extracted_from → source chunk (for provenance)
  * - referenced_by → for orphan entities (only targets, no subjects)
  */
@@ -122,7 +124,8 @@ function buildUpdates(
   operations: ParsedOperations,
   labelToId: Map<string, string>,
   sourceRef: SourceRef,
-  sourceChunkId: string
+  sourceChunkId: string,
+  sourceText: string
 ): AdditiveUpdate[] {
   // Track all updates by entity ID
   const updatesByEntity = new Map<string, AdditiveUpdate>();
@@ -143,7 +146,27 @@ function buildUpdates(
   const subjects = new Set<string>();
   const targets = new Set<string>();
 
-  // Process property operations
+  // Process CREATE operations (inline properties + description)
+  for (const createOp of operations.creates) {
+    const entityId = labelToId.get(normalizeLabel(createOp.label));
+    if (!entityId) continue;
+
+    const update = getUpdate(entityId);
+
+    // Add description from CreateOp
+    if (createOp.description) {
+      update.properties!.description = createOp.description;
+    }
+
+    // Add inline properties from CreateOp
+    if (createOp.properties) {
+      for (const [key, value] of Object.entries(createOp.properties)) {
+        update.properties![key] = value;
+      }
+    }
+  }
+
+  // Process ADD_PROPERTY operations (deprecated but still supported)
   for (const propOp of operations.properties) {
     const entityId = labelToId.get(normalizeLabel(propOp.entity));
     if (!entityId) {
@@ -176,6 +199,9 @@ function buildUpdates(
     subjects.add(subjectId);
     targets.add(targetId);
 
+    // Extract quote from source text using boundary markers
+    const extractedQuote = extractQuote(sourceText, relOp.quote_start, relOp.quote_end);
+
     // Add outgoing relationship to subject
     const update = getUpdate(subjectId);
     update.relationships_add!.push({
@@ -184,11 +210,9 @@ function buildUpdates(
       peer_label: relOp.target,
       direction: 'outgoing',
       properties: {
-        description: relOp.description || '',
+        description: relOp.description,
         source: sourceRef,
-        source_text: relOp.source_text,
-        confidence: relOp.confidence ?? 1.0,
-        context: relOp.context,
+        source_text: extractedQuote || undefined,
       },
     });
   }
@@ -202,6 +226,7 @@ function buildUpdates(
 
     // If target has no outgoing relationships, add referenced_by
     if (!subjects.has(targetId)) {
+      const extractedQuote = extractQuote(sourceText, relOp.quote_start, relOp.quote_end);
       const update = getUpdate(targetId);
       update.relationships_add!.push({
         predicate: 'referenced_by',
@@ -210,7 +235,7 @@ function buildUpdates(
         direction: 'outgoing',
         properties: {
           context: relOp.predicate, // What kind of reference
-          source_text: relOp.source_text,
+          source_text: extractedQuote || undefined,
           source: sourceRef,
         },
       });
@@ -407,7 +432,12 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
     const normalized = normalizeLabel(label);
     if (!explicitLabels.has(normalized)) {
       explicitLabels.add(normalized); // Prevent duplicate auto-creates for case variants
-      operations.creates.push({ op: 'create', label: normalized, entity_type: 'entity' });
+      operations.creates.push({
+        op: 'create',
+        label: normalized,
+        entity_type: 'entity',
+        description: `Entity referenced in ${sourceLabel}`,
+      });
     }
   }
 
@@ -466,7 +496,7 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
     label: sourceLabel,
   };
 
-  const updates = buildUpdates(operations, labelToId, sourceRef, target.id);
+  const updates = buildUpdates(operations, labelToId, sourceRef, target.id, text);
 
   // Add source → extracted entity relationships (enables traversal from source text)
   if (results.length > 0) {

@@ -45,8 +45,15 @@ export interface CreateOp {
   op: 'create';
   label: string;
   entity_type: string;
+  /** Brief description of what this entity is (required) */
+  description: string;
+  /** Properties for this entity (at least 2 recommended) */
+  properties?: Record<string, string>;
 }
 
+/**
+ * @deprecated Use inline properties in CreateOp instead
+ */
 export interface AddPropertyOp {
   op: 'add_property';
   entity: string;
@@ -59,10 +66,12 @@ export interface AddRelationshipOp {
   subject: string;
   predicate: string;
   target: string;
-  description?: string;
-  source_text?: string;
-  confidence?: number;
-  context?: string;
+  /** What this relationship means in context (required) */
+  description: string;
+  /** First ~4 words of the supporting quote */
+  quote_start?: string;
+  /** Last ~4 words of the supporting quote */
+  quote_end?: string;
 }
 
 export type Operation = CreateOp | AddPropertyOp | AddRelationshipOp;
