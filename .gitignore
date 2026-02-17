@@ -5,3 +5,4 @@ dist/
 .klados-state.json
 .klados-state.prod.json
 *.log
+*.env

@@ -46,6 +46,17 @@ During her time in Vienna, Chen developed what she called "somatic integration t
 
 Chen's relationship with both Reich and Freud was complicated by the political tensions of the era. She maintained correspondence with both men even after their famous split, serving as an informal mediator. Her letters, recently discovered in the Reich archives, provide new insight into this pivotal moment in the history of psychoanalysis.`;
 
+// Text with ambiguous proper nouns - reads naturally in either context
+const AMBIGUOUS_TEXT = `The Phoenix will rise in Q3 when Mercury aligns with Jupiter. The Tiger and Dragon forces have been preparing for the Saturn transition, working to ensure all elements converge before the celestial window closes.
+
+Phoenix energy flows through the constellation of interconnected channels. Mercury governs swift communication, while Saturn oversees the deeper, longer cycles. Dragon brings foundational power, with Tiger providing dynamic forward momentum.
+
+The alignment between Mercury and Jupiter phases is critical. When Saturn enters its next phase, Gemini must be fully activated. The Tiger and Dragon energies have been harmonizing weekly to coordinate the celestial protocols.
+
+Sarah Chen, who guides the Phoenix work, explained: "This convergence of Mercury, Saturn, Jupiter, and Gemini hasn't occurred since the Apollo era. Q3 will be transformative."
+
+The ancient symbols remind us: Phoenix rises from transformation, Tiger represents courage, Dragon embodies wisdom, and the planets guide our timing.`;
+
 // =============================================================================
 // Test Suite
 // =============================================================================
@@ -230,12 +241,10 @@ describe('context-dependent-extraction', () => {
       }
     }
 
-    // Check what entities were created
-    const logData = kladosLog.properties.log_data;
     log(`\n--- Results ---`);
-    log(`New entities (outputs): ${logData.entry?.outputs?.length || 0}`);
 
     // Query the collection to see ALL extracted entities (exclude test fixtures)
+    // Note: outputs are not stored in the log - they're used for workflow handoffs only
     // Note: Collection entities returns {id, type, label} at top level, not nested in properties
     const collectionEntities = await apiRequest<{ entities: Array<{ id: string; type: string; label: string }> }>(
       'GET',
@@ -299,10 +308,7 @@ describe('context-dependent-extraction', () => {
       }
     }
 
-    // Check what entities were created
-    const logData = kladosLog.properties.log_data;
     log(`\n--- Results ---`);
-    log(`New entities (outputs): ${logData.entry?.outputs?.length || 0}`);
 
     // Query the collection to see ALL extracted entities
     const collectionEntities = await apiRequest<{ entities: Array<{ id: string; type: string; label: string }> }>(
@@ -312,6 +318,253 @@ describe('context-dependent-extraction', () => {
 
     // Filter to just extracted entities (not our test fixtures)
     const fixtureTypes = new Set(['research_document', 'biography_chapter', 'fiction_novel', 'novel_chapter']);
+    const extractedEntities = collectionEntities.entities.filter(e => !fixtureTypes.has(e.type));
+
+    log(`\nExtracted entities: ${extractedEntities.length}`);
+    for (const ent of extractedEntities) {
+      log(`  - [${ent.type}] ${ent.label}`);
+    }
+  }, 180000);
+});
+
+// =============================================================================
+// Test Suite 2: Corporate Memo vs Astrology Article
+// =============================================================================
+
+describe('ambiguous-proper-nouns', () => {
+  let targetCollection: { id: string };
+  let corporateMemoDocId: string;
+  let corporateMemoChunkId: string;
+  let astrologyArticleDocId: string;
+  let astrologyArticleChunkId: string;
+
+  beforeAll(() => {
+    if (!ARKE_USER_KEY || !KLADOS_ID) {
+      console.warn('Skipping tests: missing environment variables');
+      return;
+    }
+
+    configureTestClient({
+      apiBase: ARKE_API_BASE,
+      userKey: ARKE_USER_KEY,
+      network: NETWORK,
+    });
+  });
+
+  // Create test fixtures
+  beforeAll(async () => {
+    if (!ARKE_USER_KEY || !KLADOS_ID) return;
+
+    log('Creating test fixtures for ambiguous proper nouns test...');
+
+    // Create target collection
+    targetCollection = await createCollection({
+      label: `Ambiguous Test ${Date.now()}`,
+      description: 'Testing context-dependent extraction with ambiguous proper nouns',
+      roles: { public: ['*:view', '*:invoke'] },
+    });
+    log(`Created collection: ${targetCollection.id}`);
+
+    // === TEST A: Corporate Internal Memo ===
+    log('\n--- Setting up Test A: Corporate Memo ---');
+
+    const corpDoc = await apiRequest<{ id: string }>('POST', '/entities', {
+      type: 'internal_memo',
+      collection: targetCollection.id,
+      properties: {
+        label: 'Q3 2024 Project Status Update',
+        description: 'Internal company memo discussing project codenames, team assignments, and system integration milestones. Confidential - for internal distribution only.',
+        document_type: 'internal_communication',
+        department: 'Engineering',
+        classification: 'confidential',
+      },
+    });
+    corporateMemoDocId = corpDoc.id;
+    log(`Created corporate memo document: ${corporateMemoDocId}`);
+
+    const corpChunk = await apiRequest<{ id: string }>('POST', '/entities', {
+      type: 'memo_section',
+      collection: targetCollection.id,
+      properties: {
+        label: 'Project Phoenix Integration Status',
+        description: 'Section detailing the integration status of Project Phoenix with related internal systems and team coordination.',
+        text: AMBIGUOUS_TEXT,
+        section_number: 2,
+      },
+      relationships: [
+        { predicate: 'part_of', peer: corporateMemoDocId, direction: 'outgoing' },
+      ],
+    });
+    corporateMemoChunkId = corpChunk.id;
+    log(`Created corporate memo chunk: ${corporateMemoChunkId}`);
+
+    // === TEST B: Astrology/Mythology Article ===
+    log('\n--- Setting up Test B: Astrology Article ---');
+
+    const astroDoc = await apiRequest<{ id: string }>('POST', '/entities', {
+      type: 'astrology_publication',
+      collection: targetCollection.id,
+      properties: {
+        label: 'Celestial Alignments and Mythological Symbolism Quarterly',
+        description: 'A peer-reviewed journal exploring the intersection of astronomical phenomena, astrological interpretation, and mythological symbolism across cultures.',
+        publication_type: 'academic_journal',
+        field: 'astrology_and_mythology',
+        issn: '1234-5678',
+      },
+    });
+    astrologyArticleDocId = astroDoc.id;
+    log(`Created astrology document: ${astrologyArticleDocId}`);
+
+    const astroChunk = await apiRequest<{ id: string }>('POST', '/entities', {
+      type: 'journal_article',
+      collection: targetCollection.id,
+      properties: {
+        label: 'The Phoenix Rising: Planetary Alignments in Q3 2024',
+        description: 'An analysis of the rare convergence of Mercury, Saturn, Jupiter, and Gemini during the Phoenix constellation period, with implications for Tiger and Dragon zodiac signs.',
+        text: AMBIGUOUS_TEXT,
+        article_type: 'research_article',
+      },
+      relationships: [
+        { predicate: 'part_of', peer: astrologyArticleDocId, direction: 'outgoing' },
+      ],
+    });
+    astrologyArticleChunkId = astroChunk.id;
+    log(`Created astrology article chunk: ${astrologyArticleChunkId}`);
+
+    log('\n=== Test fixtures created ===');
+  });
+
+  // Cleanup
+  afterAll(async () => {
+    if (!ARKE_USER_KEY || !KLADOS_ID) return;
+
+    log('Cleaning up test fixtures...');
+    try {
+      if (corporateMemoChunkId) await deleteEntity(corporateMemoChunkId);
+      if (corporateMemoDocId) await deleteEntity(corporateMemoDocId);
+      if (astrologyArticleChunkId) await deleteEntity(astrologyArticleChunkId);
+      if (astrologyArticleDocId) await deleteEntity(astrologyArticleDocId);
+      if (targetCollection?.id) await deleteEntity(targetCollection.id);
+      log('Cleanup complete');
+    } catch (e) {
+      log(`Cleanup error (non-fatal): ${e}`);
+    }
+  });
+
+  it('should extract corporate codenames from internal memo context', async () => {
+    if (!ARKE_USER_KEY || !KLADOS_ID) {
+      console.warn('Test skipped: missing environment variables');
+      return;
+    }
+
+    log('\n=== Test A: Extracting from CORPORATE MEMO ===');
+    log('Context: internal_memo → memo_section');
+    log('Expected: Phoenix, Mercury, Saturn = projects/systems; Tiger, Dragon = teams\n');
+
+    // Verify the relationship exists
+    const chapter = await apiRequest<{ type: string; relationships: unknown[] }>(
+      'GET',
+      `/entities/${corporateMemoChunkId}?expand=relationships:preview`
+    );
+    log(`Chunk type: ${chapter?.type}`);
+    log(`Relationships: ${JSON.stringify(chapter?.relationships, null, 2)}`);
+
+    // Invoke the extractor
+    const result = await invokeKlados({
+      kladosId: KLADOS_ID,
+      targetEntity: corporateMemoChunkId,
+      targetCollection: targetCollection.id,
+      confirm: true,
+    });
+
+    expect(result.status).toBe('started');
+    log(`Job started: ${result.job_id}`);
+
+    // Wait for completion
+    const kladosLog = await waitForKladosLog(result.job_collection!, {
+      timeout: 120000,
+      pollInterval: 5000,
+    });
+
+    assertLogCompleted(kladosLog);
+    log(`\nJob completed with status: ${kladosLog.properties.status}`);
+
+    // Log messages
+    log('\n--- Extraction Log ---');
+    for (const msg of kladosLog.properties.log_data.messages) {
+      log(`  [${msg.level}] ${msg.message}`);
+    }
+
+    log(`\n--- Results ---`);
+
+    // Query extracted entities
+    const collectionEntities = await apiRequest<{ entities: Array<{ id: string; type: string; label: string }> }>(
+      'GET',
+      `/collections/${targetCollection.id}/entities?limit=100`
+    );
+
+    const fixtureTypes = new Set(['internal_memo', 'memo_section', 'astrology_publication', 'journal_article']);
+    const extractedEntities = collectionEntities.entities.filter(e => !fixtureTypes.has(e.type));
+
+    log(`\nExtracted entities: ${extractedEntities.length}`);
+    for (const ent of extractedEntities) {
+      log(`  - [${ent.type}] ${ent.label}`);
+    }
+  }, 180000);
+
+  it('should extract celestial/mythological entities from astrology context', async () => {
+    if (!ARKE_USER_KEY || !KLADOS_ID) {
+      console.warn('Test skipped: missing environment variables');
+      return;
+    }
+
+    log('\n=== Test B: Extracting from ASTROLOGY ARTICLE ===');
+    log('Context: astrology_publication → journal_article');
+    log('Expected: Phoenix, Mercury, Saturn, Jupiter = celestial bodies; Tiger, Dragon = zodiac signs\n');
+
+    // Verify the relationship exists
+    const chapter = await apiRequest<{ type: string; relationships: unknown[] }>(
+      'GET',
+      `/entities/${astrologyArticleChunkId}?expand=relationships:preview`
+    );
+    log(`Chunk type: ${chapter?.type}`);
+    log(`Relationships: ${JSON.stringify(chapter?.relationships, null, 2)}`);
+
+    // Invoke the extractor
+    const result = await invokeKlados({
+      kladosId: KLADOS_ID,
+      targetEntity: astrologyArticleChunkId,
+      targetCollection: targetCollection.id,
+      confirm: true,
+    });
+
+    expect(result.status).toBe('started');
+    log(`Job started: ${result.job_id}`);
+
+    // Wait for completion
+    const kladosLog = await waitForKladosLog(result.job_collection!, {
+      timeout: 120000,
+      pollInterval: 5000,
+    });
+
+    assertLogCompleted(kladosLog);
+    log(`\nJob completed with status: ${kladosLog.properties.status}`);
+
+    // Log messages
+    log('\n--- Extraction Log ---');
+    for (const msg of kladosLog.properties.log_data.messages) {
+      log(`  [${msg.level}] ${msg.message}`);
+    }
+
+    log(`\n--- Results ---`);
+
+    // Query extracted entities
+    const collectionEntities = await apiRequest<{ entities: Array<{ id: string; type: string; label: string }> }>(
+      'GET',
+      `/collections/${targetCollection.id}/entities?limit=100`
+    );
+
+    const fixtureTypes = new Set(['internal_memo', 'memo_section', 'astrology_publication', 'journal_article']);
     const extractedEntities = collectionEntities.entities.filter(e => !fixtureTypes.has(e.type));
 
     log(`\nExtracted entities: ${extractedEntities.length}`);
