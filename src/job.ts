@@ -273,7 +273,7 @@ async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promi
  * Process a job and return output entity IDs (newly created entities only)
  */
 export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
-  const { request, client, logger, env } = ctx;
+  const { request, client, logger, sql, env } = ctx;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: Fetch Target Content
@@ -320,34 +320,67 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2: Call Gemini
+  // STEP 2: Call Gemini (or load from checkpoint)
   // ═══════════════════════════════════════════════════════════════════════════
-  logger.info('Calling Gemini');
-
   const sourceLabel = properties.label || 'Source';
 
-  // Build entity context for the prompt (includes relationships with previews)
-  const entityContext: EntityContext = {
-    id: target.id,
-    type: target.type,
-    label: sourceLabel,
-    description: properties.description as string | undefined,
-    properties: properties,
-    relationships: (target.relationships || []) as RelationshipWithPreview[],
-  };
+  // Check for existing checkpoint (survives DO restarts)
+  interface GeminiCheckpoint {
+    response_content: string;
+    response_tokens: number | null;
+    response_cost_usd: number | null;
+  }
+  const checkpointRows = sql.exec('SELECT * FROM gemini_checkpoint WHERE id = 1').toArray();
+  let response: { content: string; tokens: number; prompt_tokens: number; completion_tokens: number; cost_usd: number };
 
-  const response = await callGemini(
-    SYSTEM_PROMPT,
-    buildUserPrompt(text, entityContext),
-    env.GEMINI_API_KEY
-  );
+  if (checkpointRows.length > 0) {
+    // Resume from checkpoint
+    const checkpoint = checkpointRows[0] as unknown as GeminiCheckpoint;
+    logger.info('Resuming from Gemini checkpoint');
+    response = {
+      content: checkpoint.response_content,
+      tokens: checkpoint.response_tokens || 0,
+      prompt_tokens: 0, // Not tracked in checkpoint
+      completion_tokens: checkpoint.response_tokens || 0,
+      cost_usd: checkpoint.response_cost_usd || 0,
+    };
+  } else {
+    // Call Gemini
+    logger.info('Calling Gemini');
 
-  logger.info('Gemini response received', {
-    tokens: response.tokens,
-    promptTokens: response.prompt_tokens,
-    completionTokens: response.completion_tokens,
-    cost: `$${response.cost_usd.toFixed(4)}`,
-  });
+    // Build entity context for the prompt (includes relationships with previews)
+    const entityContext: EntityContext = {
+      id: target.id,
+      type: target.type,
+      label: sourceLabel,
+      description: properties.description as string | undefined,
+      properties: properties,
+      relationships: (target.relationships || []) as RelationshipWithPreview[],
+    };
+
+    response = await callGemini(
+      SYSTEM_PROMPT,
+      buildUserPrompt(text, entityContext),
+      env.GEMINI_API_KEY
+    );
+
+    // Save checkpoint immediately after Gemini returns (before entity creation)
+    sql.exec(
+      `INSERT INTO gemini_checkpoint (id, response_content, response_tokens, response_cost_usd, created_at)
+       VALUES (1, ?, ?, ?, ?)`,
+      response.content,
+      response.tokens,
+      response.cost_usd,
+      new Date().toISOString()
+    );
+
+    logger.info('Gemini response received and checkpointed', {
+      tokens: response.tokens,
+      promptTokens: response.prompt_tokens,
+      completionTokens: response.completion_tokens,
+      cost: `$${response.cost_usd.toFixed(4)}`,
+    });
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3: Parse Operations

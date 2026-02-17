@@ -71,7 +71,19 @@ export class KladosJobDO extends DurableObject<Env> {
         log_file_id TEXT,
         status TEXT NOT NULL DEFAULT 'accepted',
         created_at TEXT NOT NULL,
+        started_at TEXT,
         error TEXT
+      );
+    `);
+
+    // Checkpoint table for Gemini responses (survives DO restarts)
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gemini_checkpoint (
+        id INTEGER PRIMARY KEY,
+        response_content TEXT NOT NULL,
+        response_tokens INTEGER,
+        response_cost_usd REAL,
+        created_at TEXT NOT NULL
       );
     `);
   }
@@ -174,8 +186,21 @@ export class KladosJobDO extends DurableObject<Env> {
     const status = row.status as JobStatus;
     if (status === 'done' || status === 'error') return;
 
-    // Update status to processing
-    this.sql.exec(`UPDATE job_state SET status = 'processing' WHERE id = 1`);
+    // Track processing start time (for timeout detection)
+    let startedAt = row.started_at as string | null;
+    if (!startedAt) {
+      startedAt = new Date().toISOString();
+      this.sql.exec(`UPDATE job_state SET status = 'processing', started_at = ? WHERE id = 1`, startedAt);
+    } else {
+      this.sql.exec(`UPDATE job_state SET status = 'processing' WHERE id = 1`);
+    }
+
+    // Check for wall-time timeout (fail fast at 5 minutes instead of hitting 15-minute limit)
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    const elapsedMs = Date.now() - new Date(startedAt).getTime();
+    if (elapsedMs > TIMEOUT_MS) {
+      throw new Error(`Job exceeded ${TIMEOUT_MS / 60000} minute wall-time limit (elapsed: ${Math.round(elapsedMs / 1000)}s)`);
+    }
 
     // Create client (same as KladosJob)
     const client = new ArkeClient({
