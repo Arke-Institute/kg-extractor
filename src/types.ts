@@ -101,9 +101,47 @@ export interface CheckCreateResult {
  * Source reference for relationship provenance
  */
 export interface SourceRef {
-  pi: string;
+  id: string;
   type: string;
   label: string;
+}
+
+/**
+ * Peer preview from expand=relationships:preview
+ */
+export interface PeerPreview {
+  id: string;
+  type: string;
+  label: string;
+  description_preview?: string;
+  text_preview?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Relationship with optional peer preview
+ */
+export interface RelationshipWithPreview {
+  predicate: string;
+  peer: string;
+  direction: 'outgoing' | 'incoming';
+  peer_label?: string;
+  peer_type?: string;
+  peer_preview?: PeerPreview;
+  properties?: Record<string, unknown>;
+}
+
+/**
+ * Entity context passed to the LLM prompt (everything except raw text)
+ */
+export interface EntityContext {
+  id: string;
+  type: string;
+  label: string;
+  description?: string;
+  properties: Record<string, unknown>;
+  relationships: RelationshipWithPreview[];
 }
 
 /**

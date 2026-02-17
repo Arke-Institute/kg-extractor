@@ -97,7 +97,7 @@ describe('klados-do-worker', () => {
         text: 'Captain Ahab was the captain of the whaling ship Pequod. He was obsessed with hunting the white whale Moby Dick, who had bitten off his leg in a previous encounter. His first mate was Starbuck, a thoughtful and cautious man who often disagreed with Ahab\'s reckless pursuit of the whale.',
         created_at: new Date().toISOString(),
       },
-      collectionId: targetCollection.id,
+      collection: targetCollection.id,
     });
     log(`Created test entity: ${testEntity.id}`);
   });

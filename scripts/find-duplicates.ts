@@ -49,7 +49,7 @@ async function main() {
     for (const e of entities) {
       const entity = e as any;
       allEntities.push({
-        id: entity.pi,
+        id: entity.id,
         type: entity.type,
         label: entity.label || '(no label)',
       });

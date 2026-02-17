@@ -16,6 +16,8 @@ import type {
   ParsedOperations,
   AdditiveUpdate,
   SourceRef,
+  EntityContext,
+  RelationshipWithPreview,
 } from './types';
 import { callGemini } from './gemini';
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompts';
@@ -283,7 +285,10 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   }
 
   const { data: target, error: fetchError } = await client.api.GET('/entities/{id}', {
-    params: { path: { id: request.target_entity } },
+    params: {
+      path: { id: request.target_entity },
+      query: { expand: 'relationships:preview' },
+    },
   });
 
   if (fetchError || !target) {
@@ -320,9 +325,20 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   logger.info('Calling Gemini');
 
   const sourceLabel = properties.label || 'Source';
+
+  // Build entity context for the prompt (includes relationships with previews)
+  const entityContext: EntityContext = {
+    id: target.id,
+    type: target.type,
+    label: sourceLabel,
+    description: properties.description as string | undefined,
+    properties: properties,
+    relationships: (target.relationships || []) as RelationshipWithPreview[],
+  };
+
   const response = await callGemini(
     SYSTEM_PROMPT,
-    buildUserPrompt(text, { id: target.id, label: sourceLabel }),
+    buildUserPrompt(text, entityContext),
     env.GEMINI_API_KEY
   );
 
@@ -412,7 +428,7 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   // STEP 5: Fire Updates (FIRE-AND-FORGET via /updates/additive)
   // ═══════════════════════════════════════════════════════════════════════════
   const sourceRef: SourceRef = {
-    pi: target.id,
+    id: target.id,
     type: target.type,
     label: sourceLabel,
   };

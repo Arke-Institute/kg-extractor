@@ -76,7 +76,7 @@ describe('graph connectivity', () => {
     log('Creating entity...');
     const ent = await createEntity({
       type: 'text_chunk',
-      collectionId: coll.id,
+      collection: coll.id,
       properties: {
         label: 'Moby Dick Chapter 28 - Ahab',
         text: loadMobyDickChunk(8000, 28), // Chapter 28: Ahab - meaty narrative content

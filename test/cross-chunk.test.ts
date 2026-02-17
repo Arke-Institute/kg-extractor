@@ -107,7 +107,7 @@ describe('cross-chunk connectivity', () => {
       chunks.map(async (chunk, i) => {
         const entity = await createEntity({
           type: 'text_chunk',
-          collectionId: coll.id,
+          collection: coll.id,
           properties: {
             label: `Moby Dick Chunk ${i + 1}`,
             text: chunk,

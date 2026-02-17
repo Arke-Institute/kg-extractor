@@ -219,7 +219,7 @@ describe('kg-extractor-v2 corpus test (DO-based)', () => {
       chunks.map(async (chunk, i) => {
         const entity = await createEntity({
           type: 'text_chunk',
-          collectionId: targetCollection.id,
+          collection: targetCollection.id,
           properties: {
             label: `Moby Dick Chunk ${i + 1}`,
             text: chunk,
