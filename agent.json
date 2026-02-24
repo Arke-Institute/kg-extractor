@@ -1,14 +1,375 @@
 {
-  "label": "KG Extractor v2",
-  "description": "Extracts entities and relationships from text using Gemini (Durable Object based for long-running operations)",
+  "schema_version": "1.0",
+
+  "label": "KG Extractor",
+  "description": "Extracts named entities and relationships from text using Gemini, producing structured knowledge graph nodes linked to the source.",
+
+  "detailed_description": "## Overview\n\nThe KG Extractor analyzes text content and identifies entities (people, places, organizations, events, concepts) along with the relationships between them. It uses Google's Gemini model for extraction and creates entities in the target collection with full provenance tracking.\n\n## How It Works\n\n1. Fetches target entity and reads text from `text` property, `content` property, or file attachment\n2. Builds context from entity relationships (if present)\n3. Calls Gemini with extraction prompt\n4. Creates entities via check-create (finds existing or creates new)\n5. Fires relationship updates asynchronously via /updates/additive\n6. Returns newly created entity IDs to next workflow step\n\n## When to Use\n\n- Processing documents for knowledge graph construction\n- Extracting structured data from unstructured text\n- Building entity databases from text corpora\n- Part of scatter-kg or scatter-kg-recursive workflows\n\n## Limitations\n\n- Works best with English text (other languages supported but less tested)\n- Maximum text size is 500KB (will error if exceeded)\n- Very long texts should be chunked first (use Text Chunker for documents > 50KB)\n- Extraction quality depends on text clarity and Gemini's capabilities",
+
   "endpoint": "https://kg-extractor-v2.nick-chimicles-professional.workers.dev",
-  "actions_required": ["entity:view", "entity:create", "entity:update", "entity:delete"],
-  "accepts": {
-    "types": ["text_chunk", "document", "*"],
+  "actions_required": ["entity:view", "entity:create", "entity:update"],
+
+  "input": {
+    "entity": {
+      "types": ["text_chunk", "document"],
+      "types_description": "Any entity containing text to extract from. Works best with text_chunk entities from the Text Chunker klados.",
+
+      "properties": {
+        "required": {},
+        "optional": {
+          "text": {
+            "type": "string",
+            "description": "The text content to analyze. This is the preferred property name.",
+            "maxLength": 500000
+          },
+          "content": {
+            "type": "string",
+            "description": "Alternative to 'text' for backward compatibility. Use 'text' for new entities.",
+            "maxLength": 500000
+          },
+          "label": {
+            "type": "string",
+            "description": "Name of the source, used for context in extraction prompts and provenance tracking."
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of the source entity, included in extraction context."
+          }
+        },
+        "notes": "Either 'text' or 'content' property must be present, OR the entity must have a text file attachment. At least 50 characters of text required."
+      },
+
+      "file": {
+        "required": false,
+        "mime_types": ["text/plain", "text/markdown"],
+        "description": "If no text/content property exists, will attempt to read from attached file via /entities/{id}/content endpoint."
+      },
+
+      "relationships": {
+        "required": {},
+        "optional": {
+          "any": {
+            "description": "All relationships on the source entity are passed to Gemini as context, helping it understand what the text is about and avoiding duplicate entity creation."
+          }
+        }
+      }
+    },
+
+    "klados_input": {
+      "description": "No workflow input parameters currently supported. Future versions may support extraction_focus, max_entities, etc.",
+      "properties": {
+        "optional": {}
+      }
+    },
+
     "cardinality": "one"
   },
-  "produces": {
-    "types": ["person", "creature", "ship", "place", "group", "object", "concept", "organization", "event", "entity"],
+
+  "output": {
+    "entities": {
+      "creates": {
+        "types": ["person", "organization", "place", "event", "concept", "object", "creature", "ship", "group", "entity"],
+        "types_description": "Entity types are determined by the content. The model chooses appropriate types based on what it extracts. 'entity' is used as a fallback for implicitly referenced items.",
+
+        "properties": {
+          "guaranteed": {
+            "label": {
+              "type": "string",
+              "description": "The canonical name of the extracted entity (e.g., 'Albert Einstein', 'New York City')."
+            },
+            "type": {
+              "type": "string",
+              "description": "The entity type (person, place, organization, etc.). Stored as the entity's type field."
+            }
+          },
+          "conditional": {
+            "description": {
+              "type": "string",
+              "description": "AI-generated description based on context from the source text.",
+              "condition": "Always attempted, but may be brief if limited context available."
+            },
+            "additional_properties": {
+              "type": "object",
+              "description": "Domain-specific properties extracted by the model (e.g., birth_date for a person, population for a city).",
+              "condition": "When the model identifies notable attributes in the text."
+            }
+          }
+        },
+
+        "relationships": {
+          "extracted_from": {
+            "target": "source entity (the text chunk)",
+            "direction": "outgoing",
+            "cardinality": "one",
+            "description": "Links each extracted entity back to its source text for provenance. Includes extracted_at timestamp."
+          },
+          "semantic_relationships": {
+            "target": "other extracted entities",
+            "direction": "outgoing",
+            "cardinality": "many",
+            "description": "Relationships discovered in the text (e.g., 'works_at', 'born_in', 'founded'). Includes description and source_text quote.",
+            "examples": ["works_at", "born_in", "founded", "married_to", "located_in", "part_of", "created_by"]
+          },
+          "referenced_by": {
+            "target": "other extracted entities",
+            "direction": "outgoing",
+            "cardinality": "many",
+            "description": "Added to entities that are only targets (not subjects) of relationships, ensuring every entity has at least one outgoing relationship for graph traversal.",
+            "condition": "When entity appears only as a relationship target, not subject."
+          }
+        }
+      },
+
+      "modifies": {
+        "target": "source entity",
+        "description": "The source text chunk is updated to track which entities were extracted from it.",
+        "relationships": {
+          "extracted_entity": {
+            "target": "each created entity",
+            "direction": "outgoing",
+            "description": "Links source to all entities extracted from it. Includes extracted_at timestamp and entity_type."
+          }
+        }
+      }
+    },
+
+    "handoff": {
+      "outputs": "IDs of newly created entities only (not existing entities found via check-create)",
+      "description": "Passes only NEW entity IDs to next workflow step. If an entity already existed (matched by label+type), it's updated but not included in handoff. This prevents duplicate processing in pipelines."
+    },
+
     "cardinality": "many"
+  },
+
+  "behavior": {
+    "processing": {
+      "tier": 2,
+      "tier_description": "Durable Object based with SQL checkpointing. Survives worker restarts and can handle long Gemini response times.",
+      "typical_duration": "5-30 seconds for typical text chunks (1-10KB), up to 2 minutes for large documents (50KB+).",
+      "idempotent": false,
+      "idempotent_description": "Re-running on same text will create duplicate entities. Use deduplication (KG Dedupe Resolver) downstream to handle this."
+    },
+
+    "constraints": {
+      "text_size": {
+        "minimum": "50 characters (will error if less)",
+        "warning": "100KB (logs warning but continues)",
+        "maximum": "500KB (will error if exceeded)"
+      },
+      "rate_limits": "Subject to Gemini API rate limits. Free tier: 60 RPM. Paid tier: higher limits apply.",
+      "concurrency": "Safe to run multiple instances in parallel. Each job gets its own DO instance keyed by job_id."
+    },
+
+    "error_handling": {
+      "no_text_content": {
+        "behavior": "Throws error",
+        "log_status": "error",
+        "message": "Target entity has no text content or content is too short"
+      },
+      "text_too_long": {
+        "behavior": "Throws error",
+        "log_status": "error",
+        "message": "Text content exceeds maximum size (XKB > 500KB)"
+      },
+      "gemini_api_error": {
+        "behavior": "Error propagates, job fails. Checkpoint is saved after successful Gemini call, so retrying will resume from parsing stage.",
+        "log_status": "error"
+      },
+      "parse_failure": {
+        "behavior": "Throws error with response preview for debugging",
+        "log_status": "error",
+        "message": "Failed to parse LLM response"
+      },
+      "no_entities_found": {
+        "behavior": "Completes successfully with empty outputs",
+        "log_status": "done",
+        "message": "Extraction complete (no entities)"
+      }
+    },
+
+    "side_effects": [
+      "Creates entities in target_collection",
+      "Updates source entity with extracted_entity relationships",
+      "Updates target_collection with contains relationship to source chunk",
+      "Fires async updates via /updates/additive (relationships and properties)",
+      "Consumes Gemini API quota"
+    ]
+  },
+
+  "examples": [
+    {
+      "name": "Basic text extraction",
+      "description": "Extract entities from a biography text chunk",
+
+      "input": {
+        "entity": {
+          "id": "ENTITY_ABC123",
+          "type": "text_chunk",
+          "properties": {
+            "label": "Einstein biography - Chapter 1",
+            "text": "Albert Einstein was born in Ulm, Germany on March 14, 1879. His family moved to Munich when he was an infant. Einstein showed early aptitude for mathematics and physics. In 1896, he enrolled at the Swiss Federal Polytechnic in Zurich, where he met his future wife Mileva Maric."
+          }
+        },
+        "klados_input": {}
+      },
+
+      "output": {
+        "entities_created": [
+          {
+            "type": "person",
+            "properties": {
+              "label": "Albert Einstein",
+              "description": "Physicist born in Ulm, Germany in 1879. Showed early aptitude for mathematics and physics. Enrolled at Swiss Federal Polytechnic in 1896."
+            }
+          },
+          {
+            "type": "place",
+            "properties": {
+              "label": "Ulm",
+              "description": "City in Germany, birthplace of Albert Einstein."
+            }
+          },
+          {
+            "type": "place",
+            "properties": {
+              "label": "Munich",
+              "description": "City in Germany where Einstein's family moved when he was an infant."
+            }
+          },
+          {
+            "type": "organization",
+            "properties": {
+              "label": "Swiss Federal Polytechnic",
+              "description": "Educational institution in Zurich where Einstein enrolled in 1896."
+            }
+          },
+          {
+            "type": "person",
+            "properties": {
+              "label": "Mileva Maric",
+              "description": "Einstein's future wife, whom he met at Swiss Federal Polytechnic."
+            }
+          }
+        ],
+        "relationships_created": [
+          { "from": "Albert Einstein", "predicate": "born_in", "to": "Ulm" },
+          { "from": "Albert Einstein", "predicate": "lived_in", "to": "Munich" },
+          { "from": "Albert Einstein", "predicate": "studied_at", "to": "Swiss Federal Polytechnic" },
+          { "from": "Albert Einstein", "predicate": "married_to", "to": "Mileva Maric" }
+        ],
+        "handoff_outputs": ["ID_001", "ID_002", "ID_003", "ID_004", "ID_005"]
+      }
+    },
+    {
+      "name": "No extractable entities",
+      "description": "Handling text with no meaningful entities to extract",
+
+      "input": {
+        "entity": {
+          "type": "text_chunk",
+          "properties": {
+            "text": "The quick brown fox jumps over the lazy dog. This sentence contains every letter of the alphabet."
+          }
+        }
+      },
+
+      "output": {
+        "entities_created": [],
+        "handoff_outputs": [],
+        "log_message": "Extraction complete (no entities)"
+      },
+
+      "notes": "Completes successfully with empty outputs. This is not an error condition."
+    },
+    {
+      "name": "Technical document extraction",
+      "description": "Extract from a technical or scientific text",
+
+      "input": {
+        "entity": {
+          "type": "document",
+          "properties": {
+            "label": "API Documentation",
+            "text": "The ArkeClient class provides methods for interacting with the Arke API. It was developed by the Arke Institute and supports both test and production networks. Key methods include getEntity(), createEntity(), and updateEntity()."
+          }
+        }
+      },
+
+      "output": {
+        "entities_created": [
+          {
+            "type": "concept",
+            "properties": {
+              "label": "ArkeClient",
+              "description": "A class that provides methods for interacting with the Arke API."
+            }
+          },
+          {
+            "type": "organization",
+            "properties": {
+              "label": "Arke Institute",
+              "description": "Organization that developed the ArkeClient."
+            }
+          },
+          {
+            "type": "concept",
+            "properties": {
+              "label": "Arke API",
+              "description": "API that ArkeClient interacts with, supporting test and production networks."
+            }
+          }
+        ]
+      }
+    }
+  ],
+
+  "metadata": {
+    "version": "2.0.0",
+    "author": "Arke Institute",
+
+    "tags": ["knowledge-graph", "extraction", "nlp", "gemini", "entities", "relationships", "tier-2"],
+
+    "related_kladoi": {
+      "prerequisites": [
+        {
+          "label": "Text Chunker",
+          "description": "Split large documents into chunks before extraction.",
+          "when": "Input document is larger than 50KB for optimal extraction quality."
+        }
+      ],
+      "often_used_with": [
+        {
+          "label": "KG Dedupe Resolver",
+          "description": "Finds and merges duplicate entities via same_as relationships.",
+          "when": "After extraction, especially when processing multiple related documents that may mention the same entities."
+        },
+        {
+          "label": "KG Cluster",
+          "description": "Groups semantically similar entities into clusters.",
+          "when": "After deduplication to organize entities into a hierarchy."
+        },
+        {
+          "label": "Describe",
+          "description": "Enhances or regenerates entity descriptions.",
+          "when": "To improve descriptions after clustering, or to add descriptions to entities with limited context."
+        }
+      ],
+      "workflows": [
+        {
+          "label": "scatter-kg",
+          "description": "Full extraction pipeline: scatter → extract → dedupe → cluster → describe"
+        },
+        {
+          "label": "scatter-kg-recursive",
+          "description": "Recursive clustering variant that builds a hierarchy of clusters"
+        }
+      ]
+    },
+
+    "costs": {
+      "api_calls": "1 Gemini API call per invocation",
+      "typical_tokens": "Input: 500-5000 tokens (text + prompt), Output: 200-2000 tokens (operations)",
+      "estimated_cost": "$0.001-0.02 per text chunk depending on size"
+    }
   }
 }
