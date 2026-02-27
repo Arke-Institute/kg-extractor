@@ -14,7 +14,7 @@
  */
 
 import { Hono } from 'hono';
-import type { KladosRequest, KladosResponse } from '@arke-institute/rhiza';
+import { getKladosConfig, type KladosRequest, type KladosResponse } from '@arke-institute/rhiza';
 import { KladosJobDO } from './job-do';
 import type { Env } from './types';
 
@@ -30,6 +30,28 @@ app.get('/health', (c) => {
     version: c.env.AGENT_VERSION,
     tier: 2,
   });
+});
+
+/**
+ * Debug endpoint to verify API key identity
+ */
+app.get('/whoami', async (c) => {
+  try {
+    const response = await fetch('https://arke-v1.arke.institute/auth/me', {
+      headers: {
+        'Authorization': `ApiKey ${c.env.ARKE_AGENT_KEY}`,
+      },
+    });
+    const data = await response.json();
+    return c.json({
+      configured_agent_id: c.env.AGENT_ID,
+      api_key_identity: data,
+    });
+  } catch (error) {
+    return c.json({
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
+  }
 });
 
 /**
@@ -69,6 +91,9 @@ app.post('/process', async (c) => {
   const doId = c.env.KLADOS_JOB.idFromName(req.job_id);
   const doStub = c.env.KLADOS_JOB.get(doId);
 
+  // Get network-aware config for dual-network deployment
+  const config = getKladosConfig(c.env, req.network);
+
   // Start the job in the DO
   const response = await doStub.fetch(
     new Request('https://do/start', {
@@ -77,9 +102,9 @@ app.post('/process', async (c) => {
       body: JSON.stringify({
         request: req,
         config: {
-          agentId: c.env.AGENT_ID,
+          agentId: config.agentId,
           agentVersion: c.env.AGENT_VERSION,
-          authToken: c.env.ARKE_AGENT_KEY,
+          authToken: config.authToken,
         },
       }),
     })

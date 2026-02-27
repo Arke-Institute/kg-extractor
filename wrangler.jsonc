@@ -23,12 +23,17 @@
   ],
 
   // Environment variables (non-secret)
+  // For dual-network deployment, set network-specific IDs
   "vars": {
-    "AGENT_ID": "IIKH9PJ2RXCWARWT0CY5D6ZSK6",
+    "AGENT_ID": "IIKJ60EDK7ED2GT32HGKMFM6HW",
+    "AGENT_ID_TEST": "IIKJ60EDK7ED2GT32HGKMFM6HW",
+    "AGENT_ID_MAIN": "01KJ60XQBHJ0GBGTP9X8HXAPPM",
     "AGENT_VERSION": "2.0.0"
   }
 
   // Secrets (set via `wrangler secret put`):
-  // - ARKE_AGENT_KEY: Your agent API key (ak_...)
+  // - ARKE_AGENT_KEY: Default agent API key (ak_...) - fallback
+  // - ARKE_AGENT_KEY_TEST: Test network agent API key
+  // - ARKE_AGENT_KEY_MAIN: Main network agent API key
   // - GEMINI_API_KEY: Your Gemini API key
 }

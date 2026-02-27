@@ -4,16 +4,31 @@
 
 /**
  * Cloudflare Worker environment bindings
+ *
+ * Supports dual-network deployment with network-specific agent IDs and keys.
+ * Set AGENT_ID_TEST/AGENT_ID_MAIN and corresponding secrets for multi-network.
  */
 export interface Env {
-  /** Klados agent ID (registered in Arke) */
+  /** Default klados agent ID (fallback if network-specific not set) */
   AGENT_ID: string;
 
   /** Agent version for logging */
   AGENT_VERSION: string;
 
-  /** Arke agent API key (secret) */
+  /** Default Arke agent API key (secret, fallback if network-specific not set) */
   ARKE_AGENT_KEY: string;
+
+  /** Test network klados ID (optional, for dual-network deployment) */
+  AGENT_ID_TEST?: string;
+
+  /** Main network klados ID (optional, for dual-network deployment) */
+  AGENT_ID_MAIN?: string;
+
+  /** Test network agent API key (secret, optional) */
+  ARKE_AGENT_KEY_TEST?: string;
+
+  /** Main network agent API key (secret, optional) */
+  ARKE_AGENT_KEY_MAIN?: string;
 
   /** Gemini API key for LLM calls (secret) */
   GEMINI_API_KEY: string;
@@ -26,6 +41,9 @@ export interface Env {
 
   /** Durable Object binding for job processing */
   KLADOS_JOB: DurableObjectNamespace;
+
+  /** Index signature for getKladosConfig compatibility */
+  [key: string]: unknown;
 }
 
 /**
