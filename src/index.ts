@@ -37,14 +37,18 @@ app.get('/health', (c) => {
  */
 app.get('/whoami', async (c) => {
   try {
+    const network = (c.req.query('network') || 'test') as 'test' | 'main';
+    const config = getKladosConfig(c.env, network);
+
     const response = await fetch('https://arke-v1.arke.institute/auth/me', {
       headers: {
-        'Authorization': `ApiKey ${c.env.ARKE_AGENT_KEY}`,
+        'Authorization': `ApiKey ${config.authToken}`,
       },
     });
     const data = await response.json();
     return c.json({
-      configured_agent_id: c.env.AGENT_ID,
+      network,
+      configured_agent_id: config.agentId,
       api_key_identity: data,
     });
   } catch (error) {
