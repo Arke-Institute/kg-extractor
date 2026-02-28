@@ -4,6 +4,13 @@
   "label": "KG Extractor",
   "description": "Extracts named entities and relationships from text using Gemini, producing structured knowledge graph nodes linked to the source.",
 
+  "match": {
+    "or": [
+      { "path": "properties.text", "exists": true },
+      { "path": "type", "in": ["text_chunk", "document"] }
+    ]
+  },
+
   "detailed_description": "## Overview\n\nThe KG Extractor analyzes text content and identifies entities (people, places, organizations, events, concepts) along with the relationships between them. It uses Google's Gemini model for extraction and creates entities in the target collection with full provenance tracking.\n\n## How It Works\n\n1. Fetches target entity and reads text from `text` property, `content` property, or file attachment\n2. Builds context from entity relationships (if present)\n3. Calls Gemini with extraction prompt\n4. Creates entities via check-create (finds existing or creates new)\n5. Fires relationship updates asynchronously via /updates/additive\n6. Returns newly created entity IDs to next workflow step\n\n## When to Use\n\n- Processing documents for knowledge graph construction\n- Extracting structured data from unstructured text\n- Building entity databases from text corpora\n- Part of scatter-kg or scatter-kg-recursive workflows\n\n## Limitations\n\n- Works best with English text (other languages supported but less tested)\n- Maximum text size is 500KB (will error if exceeded)\n- Very long texts should be chunked first (use Text Chunker for documents > 50KB)\n- Extraction quality depends on text clarity and Gemini's capabilities",
 
   "endpoint": "https://kg-extractor-v2.nick-chimicles-professional.workers.dev",
