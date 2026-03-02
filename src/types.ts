@@ -47,11 +47,12 @@ export interface Env {
 }
 
 /**
- * Properties expected on target entities (text chunks)
+ * Properties expected on target entities (text chunks or described images)
  */
 export interface TargetProperties {
   label?: string;
   text?: string;
+  description?: string; // From describe service (for images)
   content?: string; // Deprecated - use text instead
   [key: string]: unknown;
 }

@@ -85,6 +85,11 @@ async function fetchTextContent(
     return properties.text;
   }
 
+  // Fall back to properties.description (from describe service for images)
+  if (properties.description && typeof properties.description === 'string') {
+    return properties.description;
+  }
+
   // Fall back to properties.content for backward compatibility
   if (properties.content && typeof properties.content === 'string') {
     return properties.content;
