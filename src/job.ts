@@ -464,9 +464,13 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   // ═══════════════════════════════════════════════════════════════════════════
   logger.info('Check-creating entities', { count: operations.creates.length });
 
+  // Reserved Arke types that the LLM must not use — these have special
+  // permission semantics and would break downstream workers.
+  const RESERVED_TYPES = new Set(['collection', 'user']);
+
   const entitiesToCreate = operations.creates.map((c) => ({
     label: c.label,
-    type: c.entity_type,
+    type: RESERVED_TYPES.has(c.entity_type) ? `${c.entity_type}_entity` : c.entity_type,
   }));
 
   const results = await batchCheckCreate(

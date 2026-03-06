@@ -2,7 +2,7 @@
   "schema_version": "1.0",
 
   "label": "KG Extractor",
-  "description": "Extracts named entities and relationships from text using Gemini, producing structured knowledge graph nodes linked to the source.",
+  "description": "Extracts named entities and relationships from text content using Gemini. Requires entities with a 'text' property (or text file attachment) — cannot process raw files like PDFs or images. Route files through OCR or PDF extraction first.",
 
   "match": {
     "or": [

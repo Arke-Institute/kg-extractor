@@ -76,6 +76,7 @@ GUIDELINES:
 - Create an entity BEFORE referencing it in relationships
 - Use consistent labels for the same entity throughout
 - Use descriptive entity_type (e.g., "whaling_ship" not just "ship")
+- NEVER use these reserved entity types: collection, user
 - Relationship descriptions should add context beyond the predicate name
 - Quote markers help locate the source - be precise with the boundary words
 
