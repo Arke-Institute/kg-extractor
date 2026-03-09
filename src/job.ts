@@ -9,7 +9,7 @@
  */
 
 import type { ArkeClient } from '@arke-institute/sdk';
-import type { KladosLogger, KladosRequest, Output } from '@arke-institute/rhiza';
+import type { KladosJob, Output } from '@arke-institute/rhiza';
 import type {
   Env,
   TargetProperties,
@@ -30,14 +30,8 @@ import { extractQuote } from './quotes';
  * Context provided to processJob
  */
 export interface ProcessContext {
-  /** The original request */
-  request: KladosRequest;
-
-  /** Arke client for API calls */
-  client: ArkeClient;
-
-  /** Logger for messages (stored in the klados_log) */
-  logger: KladosLogger;
+  /** KladosJob instance (provides client, logger, request, fetchTarget, etc.) */
+  job: KladosJob;
 
   /** SQLite storage for checkpointing long operations */
   sql: SqlStorage;
@@ -303,7 +297,8 @@ async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promi
  * Process a job and return output entity IDs (newly created entities only)
  */
 export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
-  const { request, client, logger, sql, env } = ctx;
+  const { job, sql, env } = ctx;
+  const { request, client, log: logger } = job;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: Fetch Target Content
