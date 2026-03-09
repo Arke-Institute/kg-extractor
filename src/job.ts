@@ -266,7 +266,10 @@ interface AdditiveResponse {
 }
 
 /**
- * Fire updates via /updates/additive (fire-and-forget)
+ * Apply updates via /updates/additive
+ *
+ * Must await the POST — in a Durable Object, unawaited promises are
+ * silently dropped when the alarm handler exits.
  */
 async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promise<void> {
   if (updates.length === 0) return;
@@ -275,21 +278,18 @@ async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promi
   for (let i = 0; i < updates.length; i += UPDATE_BATCH_SIZE) {
     const batch = updates.slice(i, i + UPDATE_BATCH_SIZE);
 
-    // Fire and forget - don't await completion
     // Note: /updates/additive is not yet typed in SDK
-    (client.api.POST as Function)('/updates/additive', {
-      body: { updates: batch },
-    })
-      .then((result: { error?: unknown; data?: AdditiveResponse }) => {
-        if (result.error) {
-          console.error('[fireUpdates] Batch failed:', result.error);
-        } else {
-          console.log(`[fireUpdates] Batch accepted: ${result.data?.accepted || batch.length}`);
-        }
-      })
-      .catch((err: unknown) => {
-        console.error('[fireUpdates] Batch error:', err);
-      });
+    const result: { error?: unknown; data?: AdditiveResponse } = await (client.api.POST as Function)(
+      '/updates/additive',
+      { body: { updates: batch } }
+    );
+
+    if (result.error) {
+      console.error('[fireUpdates] Batch failed:', result.error);
+      throw new Error(`/updates/additive failed: ${JSON.stringify(result.error)}`);
+    }
+
+    console.log(`[fireUpdates] Batch accepted: ${result.data?.accepted || batch.length}`);
   }
 }
 
@@ -518,21 +518,6 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
       })),
     });
   }
-
-  // Add collection → chunk relationship (enables auditing which chunks were processed)
-  updates.push({
-    entity_id: request.target_collection,
-    relationships_add: [{
-      predicate: 'contains',
-      peer: target.id,
-      peer_label: sourceLabel,
-      direction: 'outgoing' as const,
-      properties: {
-        relationship_type: 'processed_chunk',
-        processed_at: new Date().toISOString(),
-      },
-    }],
-  });
 
   if (updates.length > 0) {
     const totalRelationships = updates.reduce(
