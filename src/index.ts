@@ -40,7 +40,7 @@ app.get('/whoami', async (c) => {
     const network = (c.req.query('network') || 'test') as 'test' | 'main';
     const config = getKladosConfig(c.env, network);
 
-    const response = await fetch('https://arke-v1.arke.institute/auth/me', {
+    const response = await fetch('https://arke-v1.arke.institute/auth/whoami', {
       headers: {
         'Authorization': `ApiKey ${config.authToken}`,
       },
