@@ -135,15 +135,19 @@ function buildContextSection(ctx: EntityContext): string {
 /**
  * Build the user prompt with context and text to extract from
  */
-export function buildUserPrompt(text: string, entityContext: EntityContext): string {
+export function buildUserPrompt(text: string, entityContext: EntityContext, instructions?: string): string {
   const contextSection = buildContextSection(entityContext);
+
+  const instructionsSection = instructions
+    ? `\n---\n\n## CUSTOM INSTRUCTIONS (from workflow invoker)\nFollow these additional instructions when extracting:\n\n${instructions}\n`
+    : '';
 
   return `## CONTEXT (for understanding only - do NOT extract from this)
 The following metadata describes what this text IS and what it's PART OF.
 Use this context to better understand the text, but extract entities only from the TEXT below.
 
 ${contextSection}
-
+${instructionsSection}
 ---
 
 ## TEXT TO ANALYZE (extract knowledge from this)

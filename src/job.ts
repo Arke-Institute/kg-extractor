@@ -12,6 +12,7 @@ import type { ArkeClient } from '@arke-institute/sdk';
 import type { KladosJob, Output } from '@arke-institute/rhiza';
 import type {
   Env,
+  ExtractorInput,
   TargetProperties,
   ParsedOperations,
   AdditiveUpdate,
@@ -299,11 +300,14 @@ async function fireUpdates(client: ArkeClient, updates: AdditiveUpdate[]): Promi
 export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   const { job, sql, env } = ctx;
   const { request, client, log: logger } = job;
+  const input = (request.input || {}) as ExtractorInput;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 1: Fetch Target Content
   // ═══════════════════════════════════════════════════════════════════════════
-  logger.info('Starting extraction');
+  logger.info('Starting extraction', {
+    ...(input.instructions ? { hasCustomInstructions: true } : {}),
+  });
 
   if (!request.target_entity) {
     throw new Error('No target_entity in request');
@@ -385,7 +389,7 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
 
     response = await callGemini(
       SYSTEM_PROMPT,
-      buildUserPrompt(text, entityContext),
+      buildUserPrompt(text, entityContext, input.instructions),
       env.GEMINI_API_KEY
     );
 

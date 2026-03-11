@@ -63,9 +63,14 @@
     },
 
     "klados_input": {
-      "description": "No workflow input parameters currently supported. Future versions may support extraction_focus, max_entities, etc.",
+      "description": "Optional parameters to customize extraction behavior.",
       "properties": {
-        "optional": {}
+        "optional": {
+          "instructions": {
+            "type": "string",
+            "description": "Custom instructions appended to the extraction prompt. Use to guide what types of entities to focus on, what to skip, or how to interpret domain-specific content. Example: 'Focus on legal entities and contractual relationships. Skip generic organizational mentions.'"
+          }
+        }
       }
     },
 

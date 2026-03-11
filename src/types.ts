@@ -47,6 +47,14 @@ export interface Env {
 }
 
 /**
+ * Input parameters passed via request.input
+ */
+export interface ExtractorInput {
+  /** Custom instructions appended to the extraction prompt */
+  instructions?: string;
+}
+
+/**
  * Properties expected on target entities (text chunks or described images)
  */
 export interface TargetProperties {
