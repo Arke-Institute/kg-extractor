@@ -260,22 +260,14 @@ function buildUpdates(
   }
 
   // Build per-entity source map from CREATE ops
-  // Only accept source IDs that are the default source or entities we created/know about
-  // (prevents LLM from citing collection IDs or other entities we can't update)
-  const knownEntityIds = new Set(labelToId.values());
   const entitySourceMap = new Map<string, { id: string; ref: SourceRef }>();
   for (const createOp of operations.creates) {
     const entityId = labelToId.get(normalizeLabel(createOp.label));
     if (!entityId || !createOp.source) continue;
-    const srcId = createOp.source.id;
-    if (srcId === defaultSourceId || knownEntityIds.has(srcId)) {
-      entitySourceMap.set(entityId, {
-        id: srcId,
-        ref: { id: srcId, type: 'entity', label: createOp.source.label },
-      });
-    } else {
-      console.warn(`[buildUpdates] Ignoring invalid source ID "${srcId}" from LLM (not a known entity), using default`);
-    }
+    entitySourceMap.set(entityId, {
+      id: createOp.source.id,
+      ref: { id: createOp.source.id, type: 'entity', label: createOp.source.label },
+    });
   }
 
   // Add extracted_from to ALL entities (per-entity source or default input entity)
@@ -346,7 +338,6 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   // ═══════════════════════════════════════════════════════════════════════════
   logger.info('Starting extraction', {
     ...(input.instructions ? { hasCustomInstructions: true } : {}),
-    ...(input.target_entity_count ? { targetEntityCount: input.target_entity_count } : {}),
   });
 
   if (!request.target_entity) {
@@ -429,7 +420,7 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
 
     response = await callGemini(
       SYSTEM_PROMPT,
-      buildUserPrompt(text, entityContext, input.instructions, input.target_entity_count),
+      buildUserPrompt(text, entityContext, input.instructions),
       env.GEMINI_API_KEY
     );
 
@@ -549,7 +540,6 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   // Add extracted_entity relationships grouped by source entity
   // If AI cited a specific source (e.g., a page), that entity gets the relationship
   // Otherwise falls back to the input entity (e.g., page_group)
-  // Note: entitySourceMap is already validated to only contain known entity IDs
   if (results.length > 0) {
     const bySource = new Map<string, Array<{ entityId: string; label: string; type: string }>>();
     for (const result of results) {
