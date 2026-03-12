@@ -111,22 +111,31 @@ async function fetchTextContent(
 }
 
 /**
+ * Result from buildUpdates — includes the entity source map for caller use
+ */
+interface BuildUpdatesResult {
+  updates: AdditiveUpdate[];
+  /** Maps entityId → source info from CREATE ops (for extracted_entity grouping) */
+  entitySourceMap: Map<string, { id: string; ref: SourceRef }>;
+}
+
+/**
  * Build updates for /updates/additive from parsed operations
  *
  * Consolidates ALL updates per entity:
  * - Properties from CreateOp (inline) and AddPropertyOp (deprecated)
  * - Description from CreateOp
  * - Outgoing relationships from LLM (with quote extraction)
- * - extracted_from → source chunk (for provenance)
+ * - extracted_from → source (per-operation or default input entity)
  * - referenced_by → for orphan entities (only targets, no subjects)
  */
 function buildUpdates(
   operations: ParsedOperations,
   labelToId: Map<string, string>,
-  sourceRef: SourceRef,
-  sourceChunkId: string,
+  defaultSourceRef: SourceRef,
+  defaultSourceId: string,
   sourceText: string
-): AdditiveUpdate[] {
+): BuildUpdatesResult {
   // Track all updates by entity ID
   const updatesByEntity = new Map<string, AdditiveUpdate>();
 
@@ -202,6 +211,11 @@ function buildUpdates(
     // Extract quote from source text using boundary markers
     const extractedQuote = extractQuote(sourceText, relOp.quote_start, relOp.quote_end);
 
+    // Resolve per-relationship source (AI-provided or default)
+    const relSourceRef = relOp.source
+      ? { id: relOp.source.id, type: 'entity', label: relOp.source.label }
+      : defaultSourceRef;
+
     // Add outgoing relationship to subject
     const update = getUpdate(subjectId);
     update.relationships_add!.push({
@@ -211,7 +225,7 @@ function buildUpdates(
       direction: 'outgoing',
       properties: {
         description: relOp.description,
-        source: sourceRef,
+        source: relSourceRef,
         source_text: extractedQuote || undefined,
       },
     });
@@ -227,6 +241,9 @@ function buildUpdates(
     // If target has no outgoing relationships, add referenced_by
     if (!subjects.has(targetId)) {
       const extractedQuote = extractQuote(sourceText, relOp.quote_start, relOp.quote_end);
+      const relSourceRef = relOp.source
+        ? { id: relOp.source.id, type: 'entity', label: relOp.source.label }
+        : defaultSourceRef;
       const update = getUpdate(targetId);
       update.relationships_add!.push({
         predicate: 'referenced_by',
@@ -236,17 +253,31 @@ function buildUpdates(
         properties: {
           context: relOp.predicate, // What kind of reference
           source_text: extractedQuote || undefined,
-          source: sourceRef,
+          source: relSourceRef,
         },
       });
     }
   }
 
-  // Add extracted_from to ALL entities (enables traversal back to source chunk)
+  // Build per-entity source map from CREATE ops
+  const entitySourceMap = new Map<string, { id: string; ref: SourceRef }>();
+  for (const createOp of operations.creates) {
+    const entityId = labelToId.get(normalizeLabel(createOp.label));
+    if (!entityId || !createOp.source) continue;
+    entitySourceMap.set(entityId, {
+      id: createOp.source.id,
+      ref: { id: createOp.source.id, type: 'entity', label: createOp.source.label },
+    });
+  }
+
+  // Add extracted_from to ALL entities (per-entity source or default input entity)
   for (const [entityId, update] of updatesByEntity) {
+    const entitySource = entitySourceMap.get(entityId);
+    const sourceId = entitySource?.id ?? defaultSourceId;
+    const sourceRef = entitySource?.ref ?? defaultSourceRef;
     update.relationships_add!.push({
       predicate: 'extracted_from',
-      peer: sourceChunkId,
+      peer: sourceId,
       peer_label: sourceRef.label,
       direction: 'outgoing',
       properties: {
@@ -256,7 +287,7 @@ function buildUpdates(
     });
   }
 
-  return Array.from(updatesByEntity.values());
+  return { updates: Array.from(updatesByEntity.values()), entitySourceMap };
 }
 
 /**
@@ -498,29 +529,41 @@ export async function processJob(ctx: ProcessContext): Promise<ProcessResult> {
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 5: Fire Updates (FIRE-AND-FORGET via /updates/additive)
   // ═══════════════════════════════════════════════════════════════════════════
-  const sourceRef: SourceRef = {
+  const defaultSourceRef: SourceRef = {
     id: target.id,
     type: target.type,
     label: sourceLabel,
   };
 
-  const updates = buildUpdates(operations, labelToId, sourceRef, target.id, text);
+  const { updates, entitySourceMap } = buildUpdates(operations, labelToId, defaultSourceRef, target.id, text);
 
-  // Add source → extracted entity relationships (enables traversal from source text)
+  // Add extracted_entity relationships grouped by source entity
+  // If AI cited a specific source (e.g., a page), that entity gets the relationship
+  // Otherwise falls back to the input entity (e.g., page_group)
   if (results.length > 0) {
-    updates.push({
-      entity_id: target.id,
-      relationships_add: results.map((r) => ({
-        predicate: 'extracted_entity',
-        peer: r.entityId,
-        peer_label: r.label,
-        direction: 'outgoing' as const,
-        properties: {
-          extracted_at: new Date().toISOString(),
-          entity_type: r.type,
-        },
-      })),
-    });
+    const bySource = new Map<string, Array<{ entityId: string; label: string; type: string }>>();
+    for (const result of results) {
+      const source = entitySourceMap.get(result.entityId);
+      const sourceId = source?.id ?? target.id;
+      if (!bySource.has(sourceId)) bySource.set(sourceId, []);
+      bySource.get(sourceId)!.push(result);
+    }
+
+    for (const [sourceId, entities] of bySource) {
+      updates.push({
+        entity_id: sourceId,
+        relationships_add: entities.map((r) => ({
+          predicate: 'extracted_entity',
+          peer: r.entityId,
+          peer_label: r.label,
+          direction: 'outgoing' as const,
+          properties: {
+            extracted_at: new Date().toISOString(),
+            entity_type: r.type,
+          },
+        })),
+      });
+    }
   }
 
   if (updates.length > 0) {

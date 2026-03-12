@@ -48,6 +48,19 @@ function isCreateOp(op: unknown): op is CreateOp {
     console.warn('[parse] CreateOp has no properties:', (op as { label?: string }).label);
   }
 
+  // Validate optional source if present
+  const source = (op as { source?: unknown }).source;
+  if (source !== undefined) {
+    if (
+      typeof source !== 'object' || source === null ||
+      typeof (source as { id?: unknown }).id !== 'string' ||
+      typeof (source as { label?: unknown }).label !== 'string'
+    ) {
+      console.warn('[parse] CreateOp has invalid source, stripping:', (op as { label?: string }).label);
+      delete (op as { source?: unknown }).source;
+    }
+  }
+
   return true;
 }
 
@@ -97,6 +110,19 @@ function isAddRelationshipOp(op: unknown): op is AddRelationshipOp {
   if (candidate.quote_end !== undefined && typeof candidate.quote_end !== 'string') {
     console.warn('[parse] AddRelationshipOp has invalid quote_end type');
     return false;
+  }
+
+  // Validate optional source if present
+  const source = (op as { source?: unknown }).source;
+  if (source !== undefined) {
+    if (
+      typeof source !== 'object' || source === null ||
+      typeof (source as { id?: unknown }).id !== 'string' ||
+      typeof (source as { label?: unknown }).label !== 'string'
+    ) {
+      console.warn('[parse] AddRelationshipOp has invalid source, stripping');
+      delete (op as { source?: unknown }).source;
+    }
   }
 
   return true;

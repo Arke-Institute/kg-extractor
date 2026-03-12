@@ -68,6 +68,15 @@ export interface TargetProperties {
 /**
  * LLM operation types
  */
+/**
+ * Optional source citation — lets the AI cite a specific entity
+ * (e.g., a page within a page_group) rather than the input entity.
+ */
+export interface OpSource {
+  id: string;
+  label: string;
+}
+
 export interface CreateOp {
   op: 'create';
   label: string;
@@ -76,6 +85,8 @@ export interface CreateOp {
   description: string;
   /** Properties for this entity (at least 2 recommended) */
   properties?: Record<string, string>;
+  /** Optional: cite the specific source entity this was extracted from */
+  source?: OpSource;
 }
 
 /**
@@ -99,6 +110,8 @@ export interface AddRelationshipOp {
   quote_start?: string;
   /** Last ~4 words of the supporting quote */
   quote_end?: string;
+  /** Optional: cite the specific source entity this relationship evidence came from */
+  source?: OpSource;
 }
 
 export type Operation = CreateOp | AddPropertyOp | AddRelationshipOp;

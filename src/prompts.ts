@@ -72,6 +72,16 @@ REQUIREMENTS:
   - quote_start: first ~4 words of the supporting text
   - quote_end: last ~4 words of the supporting text
 
+OPTIONAL SOURCE CITATION:
+If the text contains entity references (e.g., arke:ID in page markers like --- [Page N](arke:ID) ---),
+you can cite the specific source entity on any CREATE or ADD_RELATIONSHIP operation:
+
+  "source": { "id": "the-entity-id-from-text", "label": "Page 2" }
+
+This tells the system exactly WHERE in the source material the information came from.
+If the text has page markers, cite the specific page each entity or relationship was found on.
+If omitted, the parent input entity is used as the default source.
+
 GUIDELINES:
 - Create an entity BEFORE referencing it in relationships
 - Use consistent labels for the same entity throughout
